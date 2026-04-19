@@ -18,6 +18,7 @@ Fill these values:
 - `ADMIN_ROLE_ID`
 - `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
 - `DATABASE_URL` if you want PostgreSQL-backed leveling on Railway
+- `LEVEL_XP_INCREMENT` to control how much extra XP each next level requires
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`

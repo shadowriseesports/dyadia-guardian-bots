@@ -140,15 +140,15 @@ def parse_duration(value: str) -> Optional[timedelta]:
     }[unit]
 
 
-def xp_for_level(level: int) -> int:
+def xp_for_level(level: int, xp_increment: int) -> int:
     if level <= 0:
         return 0
-    return (50 * level * level) + (100 * level)
+    return xp_increment * level * (level + 1) // 2
 
 
-def level_from_xp(xp: int) -> int:
+def level_from_xp(xp: int, xp_increment: int) -> int:
     level = 0
-    while xp_for_level(level + 1) <= xp:
+    while xp_for_level(level + 1, xp_increment) <= xp:
         level += 1
     return level
 
@@ -791,6 +791,7 @@ class DyadiaGuardianBot(commands.Bot):
             value=(
                 f"- Gain {LEVEL_XP_GAIN_MIN}-{LEVEL_XP_GAIN_MAX} XP for active messages\n"
                 "- Every qualifying message can earn XP\n"
+                f"- Required XP increases by {self.settings.level_xp_increment} each level\n"
                 "- Only the most dedicated members will reach Level 1000"
             ),
             inline=False,
@@ -1027,7 +1028,7 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def sync_level_reward_role(self, member: discord.Member, *, announce: bool) -> None:
         progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp)
+        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
         eligible_role_name = get_reward_role_name(level)
         roles_to_remove = [role for role in member.roles if is_reward_role(role)]
         eligible_level = next((required_level for required_level, role_name in LEVEL_REWARD_ROLES if role_name == eligible_role_name), None)
@@ -1073,14 +1074,14 @@ class DyadiaGuardianBot(commands.Bot):
     async def award_message_xp(self, member: discord.Member) -> Optional[tuple[int, int]]:
         now = utc_now()
         progress = self.get_level_progress(member.guild.id, member.id)
-        old_level = level_from_xp(progress.xp)
+        old_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
         gained_xp = random.randint(LEVEL_XP_GAIN_MIN, LEVEL_XP_GAIN_MAX)
         progress.xp += gained_xp
         progress.messages += 1
         progress.last_message_at = now
         await self.persist_level_progress(member.guild.id, member.id, progress)
 
-        new_level = level_from_xp(progress.xp)
+        new_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
         return old_level, new_level
 
     async def handle_leveling_message(self, message: discord.Message) -> None:
@@ -1136,9 +1137,9 @@ class DyadiaGuardianBot(commands.Bot):
 
     def create_rank_embed(self, member: discord.Member) -> discord.Embed:
         progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp)
-        current_level_xp = xp_for_level(level)
-        next_level_xp = xp_for_level(level + 1)
+        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
+        current_level_xp = xp_for_level(level, self.settings.level_xp_increment)
+        next_level_xp = xp_for_level(level + 1, self.settings.level_xp_increment)
         xp_into_level = progress.xp - current_level_xp
         xp_needed = max(1, next_level_xp - current_level_xp)
         reward_name = get_reward_role_name(level) or "Unranked"
@@ -1396,7 +1397,7 @@ class DyadiaGuardianBot(commands.Bot):
             member = interaction.guild.get_member(user_id)
             display_name = member.display_name if member is not None else f"User {user_id}"
             lines.append(
-                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp)} ({progress.xp} XP)"
+                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.settings.level_xp_increment)} ({progress.xp} XP)"
             )
 
         embed = make_embed(
