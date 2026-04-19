@@ -52,3 +52,4 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
+level_data.json

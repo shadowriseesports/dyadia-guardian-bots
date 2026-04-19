@@ -63,6 +63,7 @@ You should see logs confirming:
 - mod log channel found
 - staff application channel found
 - anti-raid config values loaded
+- leveling data file loaded or created
 
 ## 7. Test modmail
 
@@ -78,3 +79,15 @@ You should see logs confirming:
 2. Use `/antiraid activate` to manually turn on raid mode
 3. Join with a fresh test account and confirm it gets timed out
 4. Use `/antiraid deactivate` to end raid mode
+
+## 9. Test leveling
+
+1. Create the rank roles in Discord using the exact names shown by `/levelpanel`
+2. Use `/levelpanel` to post the progression panel in your server
+3. Chat with a member account in the server for a few minutes
+4. Use `/rank` to confirm XP and level progress
+5. Use `/leaderboard` to confirm the server ranking updates
+
+## 10. Railway note
+
+`level_data.json` is a local file. It works for local hosting, but Railway can reset that file on redeploys or container replacement. Move leveling data to a database later if you want permanent XP.

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
+import random
 import re
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Deque, Dict, List, Optional
 
 import discord
@@ -30,6 +33,27 @@ DEFAULT_THUMBNAIL_URL = (
     "?ex=69e3d3ce&is=69e2824e&hm=7aa24fffd3c796925bc3947573334f7667874f2899c9a72d70aae32c3ee1215a&"
 )
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
+LEVEL_DATA_PATH = Path("level_data.json")
+LEVEL_XP_COOLDOWN_SECONDS = 60
+LEVEL_XP_GAIN_MIN = 15
+LEVEL_XP_GAIN_MAX = 25
+LEADERBOARD_LIMIT = 10
+LEVEL_REWARD_ROLES = [
+    (1, "Battlefield Recruit [lvl 1]"),
+    (50, "Rising Warrior [lvl 50]"),
+    (100, "Elite Fighter [lvl 100]"),
+    (200, "King's Knight [lvl 200]"),
+    (300, "Dragon Knight [lvl 300]"),
+    (400, "Realm Conqueror [lvl 400]"),
+    (500, "Supreme Conqueror [lvl 500]"),
+    (600, "Rising Legend [lvl 600]"),
+    (700, "Legendary Warlord [lvl 700]"),
+    (800, "Mythic Champion [lvl 800]"),
+    (900, "Celestial Hero [lvl 900]"),
+    (950, "Celestial Emperor [lvl 950]"),
+    (990, "Divine Sovereign [lvl 990]"),
+    (1000, "King of Kings [lvl 1000]"),
+]
 
 
 @dataclass
@@ -74,6 +98,13 @@ class AntiRaidState:
     last_trigger_count: int = 0
 
 
+@dataclass
+class LevelProgress:
+    xp: int = 0
+    messages: int = 0
+    last_message_at: Optional[datetime] = None
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -106,6 +137,29 @@ def parse_duration(value: str) -> Optional[timedelta]:
         "h": timedelta(hours=amount),
         "d": timedelta(days=amount),
     }[unit]
+
+
+def xp_for_level(level: int) -> int:
+    if level <= 0:
+        return 0
+    return (50 * level * level) + (100 * level)
+
+
+def level_from_xp(xp: int) -> int:
+    level = 0
+    while xp_for_level(level + 1) <= xp:
+        level += 1
+    return level
+
+
+def get_reward_role_name(level: int) -> Optional[str]:
+    reward_name: Optional[str] = None
+    for required_level, role_name in LEVEL_REWARD_ROLES:
+        if level >= required_level:
+            reward_name = role_name
+        else:
+            break
+    return reward_name
 
 
 def make_embed(
@@ -311,11 +365,14 @@ class DyadiaGuardianBot(commands.Bot):
         self.staff_application_drafts: Dict[int, StaffApplicationDraft] = {}
         self.mod_logs: List[ModLogEntry] = []
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
+        self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
+        self.level_cooldowns: Dict[tuple[int, int], datetime] = {}
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
         self.staff_application_view = StaffApplicationView()
 
     async def setup_hook(self) -> None:
+        self.load_level_data()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -360,10 +417,14 @@ class DyadiaGuardianBot(commands.Bot):
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
 
+        if message.guild is not None and isinstance(message.author, discord.Member):
+            await self.handle_leveling_message(message)
+
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None:
             return
         await self.handle_anti_raid_join(member)
+        await self.sync_level_reward_role(member, announce=False)
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         if interaction.type is discord.InteractionType.component:
@@ -452,6 +513,15 @@ class DyadiaGuardianBot(commands.Bot):
                 ),
                 inline=False,
             )
+            embed.add_field(
+                name="Leveling",
+                value=(
+                    "`/rank` view your level card\n"
+                    "`/leaderboard` view the top XP members\n"
+                    "`/levelpanel` post the leveling system information panel"
+                ),
+                inline=False,
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
@@ -510,6 +580,23 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_staff_apply_panel(interaction, channel)
+
+        @tree.command(name="rank", description="Show your level and XP progress")
+        @app_commands.describe(user="Optional member to inspect")
+        async def rank(interaction: discord.Interaction, user: Optional[discord.Member] = None) -> None:
+            await self.handle_rank(interaction, user)
+
+        @tree.command(name="leaderboard", description="Show the server leveling leaderboard")
+        async def leaderboard(interaction: discord.Interaction) -> None:
+            await self.handle_leaderboard(interaction)
+
+        @tree.command(name="levelpanel", description="Post the leveling system info panel")
+        @app_commands.describe(channel="Channel where the leveling panel should be posted")
+        async def levelpanel(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_level_panel(interaction, channel)
 
         anti_raid = app_commands.Group(name="antiraid", description="Manage anti-raid protection")
 
@@ -645,6 +732,44 @@ class DyadiaGuardianBot(commands.Bot):
         embed.set_footer(text=BRAND_FOOTER)
         return embed
 
+    def create_leveling_panel_embed(self, guild: discord.Guild) -> discord.Embed:
+        reward_lines = []
+        for required_level, role_name in LEVEL_REWARD_ROLES:
+            role = discord.utils.get(guild.roles, name=role_name)
+            role_display = role.mention if role is not None else role_name
+            reward_lines.append(f"Level {required_level} - {role_display}")
+
+        embed = make_embed(
+            "Honor Of Kings Northeast India Leveling System",
+            (
+                "This server uses a leveling system where members gain XP by chatting and participating in the "
+                "community. As you earn XP, you level up and unlock Honor of Kings themed ranks that show your "
+                "progress and activity in the server.\n\n"
+                "The more active you are, the higher your level becomes."
+            ),
+            discord.Color.magenta(),
+        )
+        embed.add_field(name="Rank Progression", value="\n".join(reward_lines), inline=False)
+        embed.add_field(
+            name="How To Level Up",
+            value=(
+                "- Chat and interact with other members\n"
+                "- Participate in discussions and community activities\n"
+                "- Stay active in the server"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="XP Rules",
+            value=(
+                f"- Gain {LEVEL_XP_GAIN_MIN}-{LEVEL_XP_GAIN_MAX} XP for active messages\n"
+                f"- XP can be earned once every {LEVEL_XP_COOLDOWN_SECONDS} seconds per member\n"
+                "- Only the most dedicated members will reach Level 1000"
+            ),
+            inline=False,
+        )
+        return embed
+
     def create_modlog_embed(
         self,
         action: str,
@@ -711,6 +836,199 @@ class DyadiaGuardianBot(commands.Bot):
                 duration_text=duration_text,
             )
         )
+
+    def load_level_data(self) -> None:
+        self.level_data = {}
+        if not LEVEL_DATA_PATH.exists():
+            return
+
+        try:
+            raw = json.loads(LEVEL_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load leveling data from %s", LEVEL_DATA_PATH)
+            return
+
+        guilds = raw if isinstance(raw, dict) else {}
+        for guild_id, members in guilds.items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+
+            guild_progress: Dict[int, LevelProgress] = {}
+            if not isinstance(members, dict):
+                continue
+            for user_id, payload in members.items():
+                try:
+                    parsed_user_id = int(user_id)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+
+                last_message_at = None
+                raw_last_message_at = payload.get("last_message_at")
+                if isinstance(raw_last_message_at, str):
+                    try:
+                        last_message_at = datetime.fromisoformat(raw_last_message_at)
+                    except ValueError:
+                        last_message_at = None
+
+                guild_progress[parsed_user_id] = LevelProgress(
+                    xp=max(0, int(payload.get("xp", 0) or 0)),
+                    messages=max(0, int(payload.get("messages", 0) or 0)),
+                    last_message_at=last_message_at,
+                )
+
+            self.level_data[parsed_guild_id] = guild_progress
+
+        LOGGER.info("Loaded leveling data for %s guild(s) from %s", len(self.level_data), LEVEL_DATA_PATH)
+
+    def save_level_data(self) -> None:
+        serialized: Dict[str, Dict[str, Dict[str, object]]] = {}
+        for guild_id, members in self.level_data.items():
+            serialized[str(guild_id)] = {}
+            for user_id, progress in members.items():
+                serialized[str(guild_id)][str(user_id)] = {
+                    "xp": progress.xp,
+                    "messages": progress.messages,
+                    "last_message_at": progress.last_message_at.isoformat() if progress.last_message_at else None,
+                }
+
+        try:
+            LEVEL_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save leveling data to %s", LEVEL_DATA_PATH)
+
+    def get_level_progress(self, guild_id: int, user_id: int) -> LevelProgress:
+        guild_progress = self.level_data.setdefault(guild_id, {})
+        progress = guild_progress.get(user_id)
+        if progress is None:
+            progress = LevelProgress()
+            guild_progress[user_id] = progress
+        return progress
+
+    def get_next_reward_role_name(self, level: int) -> Optional[str]:
+        for required_level, role_name in LEVEL_REWARD_ROLES:
+            if level < required_level:
+                return role_name
+        return None
+
+    async def sync_level_reward_role(self, member: discord.Member, *, announce: bool) -> None:
+        progress = self.get_level_progress(member.guild.id, member.id)
+        level = level_from_xp(progress.xp)
+        eligible_role_name = get_reward_role_name(level)
+        reward_role_names = {role_name for _, role_name in LEVEL_REWARD_ROLES}
+        roles_to_remove = [role for role in member.roles if role.name in reward_role_names]
+
+        role_to_add = discord.utils.get(member.guild.roles, name=eligible_role_name) if eligible_role_name else None
+        if role_to_add is not None and role_to_add in roles_to_remove:
+            roles_to_remove.remove(role_to_add)
+
+        if role_to_add is not None and member.guild.me is not None and role_to_add >= member.guild.me.top_role:
+            LOGGER.warning("Cannot assign leveling role %s because it is above the bot's top role.", role_to_add.name)
+            role_to_add = None
+
+        if roles_to_remove:
+            removable_roles = [role for role in roles_to_remove if member.guild.me is None or role < member.guild.me.top_role]
+            if removable_roles:
+                try:
+                    await member.remove_roles(*removable_roles, reason="Leveling role update")
+                except discord.HTTPException:
+                    LOGGER.exception("Failed to remove old leveling roles from %s", member.id)
+
+        if role_to_add is not None and role_to_add not in member.roles:
+            try:
+                await member.add_roles(role_to_add, reason="Leveling reward role earned")
+            except discord.HTTPException:
+                LOGGER.exception("Failed to add leveling role %s to %s", role_to_add.id, member.id)
+                return
+
+            if announce:
+                try:
+                    await member.send(
+                        embed=make_embed(
+                            "New Rank Unlocked",
+                            f"You reached **Level {level}** in **{member.guild.name}** and unlocked **{role_to_add.name}**.",
+                            discord.Color.gold(),
+                        )
+                    )
+                except discord.HTTPException:
+                    LOGGER.warning("Could not DM %s about their new leveling role.", member.id)
+
+    async def award_message_xp(self, member: discord.Member) -> Optional[tuple[int, int]]:
+        now = utc_now()
+        cooldown_key = (member.guild.id, member.id)
+        last_award = self.level_cooldowns.get(cooldown_key)
+        if last_award is not None and (now - last_award) < timedelta(seconds=LEVEL_XP_COOLDOWN_SECONDS):
+            return None
+
+        progress = self.get_level_progress(member.guild.id, member.id)
+        old_level = level_from_xp(progress.xp)
+        gained_xp = random.randint(LEVEL_XP_GAIN_MIN, LEVEL_XP_GAIN_MAX)
+        progress.xp += gained_xp
+        progress.messages += 1
+        progress.last_message_at = now
+        self.level_cooldowns[cooldown_key] = now
+        self.save_level_data()
+
+        new_level = level_from_xp(progress.xp)
+        return old_level, new_level
+
+    async def handle_leveling_message(self, message: discord.Message) -> None:
+        if not isinstance(message.author, discord.Member):
+            return
+        if isinstance(message.channel, discord.Thread) and MODMAIL_THREAD_RE.match(message.channel.name):
+            return
+        if len(message.content.strip()) < 3:
+            return
+
+        result = await self.award_message_xp(message.author)
+        if result is None:
+            return
+
+        old_level, new_level = result
+        if new_level <= old_level:
+            return
+
+        await self.sync_level_reward_role(message.author, announce=True)
+        next_reward = self.get_next_reward_role_name(new_level)
+        embed = make_embed(
+            "Level Up",
+            f"{message.author.mention} reached **Level {new_level}**.",
+            discord.Color.gold(),
+        )
+        if next_reward:
+            embed.add_field(name="Next Rank", value=next_reward, inline=False)
+        await message.channel.send(embed=embed, delete_after=20)
+
+    def create_rank_embed(self, member: discord.Member) -> discord.Embed:
+        progress = self.get_level_progress(member.guild.id, member.id)
+        level = level_from_xp(progress.xp)
+        current_level_xp = xp_for_level(level)
+        next_level_xp = xp_for_level(level + 1)
+        xp_into_level = progress.xp - current_level_xp
+        xp_needed = max(1, next_level_xp - current_level_xp)
+        reward_name = get_reward_role_name(level) or "Unranked"
+        next_reward = self.get_next_reward_role_name(level)
+
+        embed = make_embed(
+            f"{member.display_name}'s Rank",
+            f"Current title: **{reward_name}**",
+            discord.Color.blurple(),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="Level", value=str(level), inline=True)
+        embed.add_field(name="Total XP", value=str(progress.xp), inline=True)
+        embed.add_field(name="Messages", value=str(progress.messages), inline=True)
+        embed.add_field(name="Progress", value=f"{xp_into_level}/{xp_needed} XP", inline=True)
+        embed.add_field(
+            name="Next Level",
+            value=f"Level {level + 1} at {next_level_xp} total XP",
+            inline=True,
+        )
+        embed.add_field(name="Next Rank Reward", value=next_reward or "Top rank reached", inline=True)
+        return embed
 
     async def ensure_staff(self, interaction: discord.Interaction, permission: str) -> bool:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -917,6 +1235,69 @@ class DyadiaGuardianBot(commands.Bot):
             discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def handle_rank(self, interaction: discord.Interaction, user: Optional[discord.Member]) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target = user or interaction.user
+        if not isinstance(target, discord.Member):
+            await interaction.response.send_message("I could not resolve that member in this server.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(embed=self.create_rank_embed(target), ephemeral=True)
+
+    async def handle_leaderboard(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        guild_progress = self.level_data.get(interaction.guild.id, {})
+        ranked_members = sorted(guild_progress.items(), key=lambda item: item[1].xp, reverse=True)[:LEADERBOARD_LIMIT]
+        if not ranked_members:
+            await interaction.response.send_message("Nobody has earned XP yet.", ephemeral=True)
+            return
+
+        lines = []
+        for index, (user_id, progress) in enumerate(ranked_members, start=1):
+            member = interaction.guild.get_member(user_id)
+            display_name = member.display_name if member is not None else f"User {user_id}"
+            lines.append(
+                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp)} ({progress.xp} XP)"
+            )
+
+        embed = make_embed(
+            "Leveling Leaderboard",
+            "\n".join(lines),
+            discord.Color.gold(),
+        )
+        await interaction.response.send_message(embed=embed)
+
+    async def handle_level_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for the leveling panel.", ephemeral=True)
+                return
+
+        await target_channel.send(embed=self.create_leveling_panel_embed(interaction.guild))
+        await interaction.response.send_message(
+            f"Leveling panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
 
     def get_anti_raid_state(self, guild_id: int) -> AntiRaidState:
         state = self.anti_raid_states.get(guild_id)
