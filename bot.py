@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 import discord
 from discord import app_commands
@@ -62,6 +63,15 @@ class StaffApplicationDraft:
     decision_making_and_judgment: str = ""
     commitment_and_declaration: str = ""
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class AntiRaidState:
+    enabled: bool
+    join_events: Deque[datetime] = field(default_factory=deque)
+    lockdown_until: Optional[datetime] = None
+    manual_lockdown: bool = False
+    last_trigger_count: int = 0
 
 
 def utc_now() -> datetime:
@@ -300,6 +310,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.dm_intro_cooldowns: Dict[int, datetime] = {}
         self.staff_application_drafts: Dict[int, StaffApplicationDraft] = {}
         self.mod_logs: List[ModLogEntry] = []
+        self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
         self.staff_application_view = StaffApplicationView()
@@ -348,6 +359,11 @@ class DyadiaGuardianBot(commands.Bot):
 
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        if member.guild is None:
+            return
+        await self.handle_anti_raid_join(member)
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         if interaction.type is discord.InteractionType.component:
@@ -427,6 +443,15 @@ class DyadiaGuardianBot(commands.Bot):
                 ),
                 inline=False,
             )
+            embed.add_field(
+                name="Anti-Raid",
+                value=(
+                    "`/antiraid status` show protection status\n"
+                    "`/antiraid on` or `/antiraid off` enable or disable monitoring\n"
+                    "`/antiraid activate` or `/antiraid deactivate` control raid mode manually"
+                ),
+                inline=False,
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
@@ -485,6 +510,30 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_staff_apply_panel(interaction, channel)
+
+        anti_raid = app_commands.Group(name="antiraid", description="Manage anti-raid protection")
+
+        @anti_raid.command(name="status", description="Show anti-raid status for this server")
+        async def antiraid_status(interaction: discord.Interaction) -> None:
+            await self.handle_antiraid_status(interaction)
+
+        @anti_raid.command(name="on", description="Enable anti-raid monitoring")
+        async def antiraid_on(interaction: discord.Interaction) -> None:
+            await self.handle_antiraid_toggle(interaction, True)
+
+        @anti_raid.command(name="off", description="Disable anti-raid monitoring")
+        async def antiraid_off(interaction: discord.Interaction) -> None:
+            await self.handle_antiraid_toggle(interaction, False)
+
+        @anti_raid.command(name="activate", description="Manually activate raid mode now")
+        async def antiraid_activate(interaction: discord.Interaction) -> None:
+            await self.handle_antiraid_activate(interaction)
+
+        @anti_raid.command(name="deactivate", description="Manually turn off active raid mode")
+        async def antiraid_deactivate(interaction: discord.Interaction) -> None:
+            await self.handle_antiraid_deactivate(interaction)
+
+        tree.add_command(anti_raid)
 
     def has_staff_access(self, member: discord.Member, permission: str) -> bool:
         if member.guild_permissions.administrator:
@@ -610,6 +659,7 @@ class DyadiaGuardianBot(commands.Bot):
             "BAN": discord.Color.dark_red(),
             "UNBAN": discord.Color.green(),
             "CLEAR": discord.Color.blurple(),
+            "ANTI-RAID": discord.Color.dark_orange(),
         }
         embed = discord.Embed(
             title=f"{action} Action",
@@ -867,6 +917,207 @@ class DyadiaGuardianBot(commands.Bot):
             discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    def get_anti_raid_state(self, guild_id: int) -> AntiRaidState:
+        state = self.anti_raid_states.get(guild_id)
+        if state is None:
+            state = AntiRaidState(enabled=self.settings.anti_raid_enabled)
+            self.anti_raid_states[guild_id] = state
+        return state
+
+    def anti_raid_is_active(self, state: AntiRaidState) -> bool:
+        return state.lockdown_until is not None and state.lockdown_until > utc_now()
+
+    def prune_anti_raid_events(self, state: AntiRaidState, now: datetime) -> None:
+        window = timedelta(seconds=self.settings.anti_raid_window_seconds)
+        while state.join_events and (now - state.join_events[0]) > window:
+            state.join_events.popleft()
+
+    async def send_anti_raid_alert(self, guild: discord.Guild, title: str, description: str) -> None:
+        embed = make_embed(title, description, discord.Color.dark_orange())
+        embed.add_field(name="Server", value=f"{guild.name} (`{guild.id}`)", inline=False)
+        await self.send_modlog(embed)
+
+    def create_anti_raid_status_embed(self, guild: discord.Guild, state: AntiRaidState) -> discord.Embed:
+        active = self.anti_raid_is_active(state)
+        remaining = "Inactive"
+        if active and state.lockdown_until is not None:
+            remaining = format_duration(state.lockdown_until - utc_now())
+
+        embed = make_embed(
+            "Anti-Raid Status",
+            f"Protection for **{guild.name}** is {'enabled' if state.enabled else 'disabled'}.",
+            discord.Color.dark_orange() if active else discord.Color.blurple(),
+        )
+        embed.add_field(name="Raid Mode", value="Active" if active else "Inactive", inline=True)
+        embed.add_field(name="Remaining", value=remaining, inline=True)
+        embed.add_field(
+            name="Trigger Rule",
+            value=(
+                f"{self.settings.anti_raid_join_threshold} joins in "
+                f"{self.settings.anti_raid_window_seconds} seconds"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Auto Timeout",
+            value=(
+                f"Accounts newer than {self.settings.anti_raid_account_age_minutes} minute(s) "
+                f"are timed out for {self.settings.anti_raid_timeout_minutes} minute(s) during raid mode."
+            ),
+            inline=False,
+        )
+        if state.last_trigger_count:
+            embed.add_field(name="Last Trigger Count", value=str(state.last_trigger_count), inline=True)
+        return embed
+
+    async def activate_anti_raid(
+        self,
+        guild: discord.Guild,
+        triggered_by: Optional[discord.abc.User],
+        reason: str,
+        *,
+        manual: bool = False,
+        trigger_count: Optional[int] = None,
+    ) -> AntiRaidState:
+        state = self.get_anti_raid_state(guild.id)
+        state.enabled = True
+        state.manual_lockdown = manual
+        state.lockdown_until = utc_now() + timedelta(minutes=self.settings.anti_raid_lockdown_minutes)
+        if trigger_count is not None:
+            state.last_trigger_count = trigger_count
+
+        source = f"Activated by {triggered_by} ({triggered_by.id})" if triggered_by else "Activated automatically"
+        description = (
+            f"{reason}\n\n"
+            f"{source}\n"
+            f"Raid mode will stay active for {self.settings.anti_raid_lockdown_minutes} minute(s)."
+        )
+        if trigger_count is not None:
+            description += f"\nObserved joins in window: {trigger_count}"
+        await self.send_anti_raid_alert(guild, "Anti-Raid Activated", description)
+        return state
+
+    async def deactivate_anti_raid(
+        self,
+        guild: discord.Guild,
+        actor: Optional[discord.abc.User],
+        reason: str,
+    ) -> AntiRaidState:
+        state = self.get_anti_raid_state(guild.id)
+        state.lockdown_until = None
+        state.manual_lockdown = False
+        await self.send_anti_raid_alert(
+            guild,
+            "Anti-Raid Deactivated",
+            f"{reason}\n\nDeactivated by {actor} ({actor.id})" if actor else reason,
+        )
+        return state
+
+    async def handle_anti_raid_join(self, member: discord.Member) -> None:
+        state = self.get_anti_raid_state(member.guild.id)
+        if not state.enabled or member.bot:
+            return
+
+        now = utc_now()
+        self.prune_anti_raid_events(state, now)
+        state.join_events.append(now)
+        trigger_count = len(state.join_events)
+
+        if trigger_count >= self.settings.anti_raid_join_threshold and not self.anti_raid_is_active(state):
+            await self.activate_anti_raid(
+                member.guild,
+                None,
+                "Join-rate threshold reached. Raid mode was enabled automatically.",
+                manual=False,
+                trigger_count=trigger_count,
+            )
+
+        if not self.anti_raid_is_active(state):
+            return
+
+        account_age = now - member.created_at
+        minimum_age = timedelta(minutes=self.settings.anti_raid_account_age_minutes)
+        if account_age > minimum_age:
+            return
+
+        timeout_for = timedelta(minutes=self.settings.anti_raid_timeout_minutes)
+        try:
+            await member.timeout(timeout_for, reason="Anti-raid protection triggered")
+        except discord.HTTPException:
+            LOGGER.exception("Failed to timeout suspected raid account %s in guild %s", member.id, member.guild.id)
+            return
+
+        reason = (
+            f"Auto-timeout during raid mode. Account age: {format_duration(account_age)}. "
+            f"Timeout: {format_duration(timeout_for)}."
+        )
+        embed = self.create_modlog_embed("ANTI-RAID", member, self.user or member.guild.me or member, reason)
+        await self.send_modlog(embed)
+        await self.add_modlog("ANTI-RAID", member, self.user or member.guild.me or member, reason)
+
+    async def handle_antiraid_status(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_staff(interaction, "moderate_members"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        state = self.get_anti_raid_state(interaction.guild.id)
+        await interaction.response.send_message(embed=self.create_anti_raid_status_embed(interaction.guild, state), ephemeral=True)
+
+    async def handle_antiraid_toggle(self, interaction: discord.Interaction, enabled: bool) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        state = self.get_anti_raid_state(interaction.guild.id)
+        state.enabled = enabled
+        if not enabled:
+            state.lockdown_until = None
+            state.manual_lockdown = False
+
+        await interaction.response.send_message(
+            f"Anti-raid monitoring has been {'enabled' if enabled else 'disabled'} for this server.",
+            ephemeral=True,
+        )
+
+    async def handle_antiraid_activate(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await self.activate_anti_raid(
+            interaction.guild,
+            interaction.user,
+            "Raid mode was activated manually by staff.",
+            manual=True,
+        )
+        await interaction.followup.send(
+            f"Raid mode is now active for {self.settings.anti_raid_lockdown_minutes} minute(s).",
+            ephemeral=True,
+        )
+
+    async def handle_antiraid_deactivate(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        state = self.get_anti_raid_state(interaction.guild.id)
+        if not self.anti_raid_is_active(state):
+            await interaction.response.send_message("Raid mode is not active right now.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await self.deactivate_anti_raid(interaction.guild, interaction.user, "Raid mode was turned off manually by staff.")
+        await interaction.followup.send("Raid mode has been deactivated.", ephemeral=True)
 
     async def handle_close(self, interaction: discord.Interaction, reason: str) -> None:
         if not await self.ensure_staff(interaction, "moderate_members"):
@@ -1232,6 +1483,15 @@ class DyadiaGuardianBot(commands.Bot):
                 "Could not fetch staff application channel %s",
                 self.settings.staff_application_channel_id,
             )
+        LOGGER.info(
+            "Anti-raid config | enabled=%s threshold=%s window=%ss lockdown=%sm account_age=%sm timeout=%sm",
+            self.settings.anti_raid_enabled,
+            self.settings.anti_raid_join_threshold,
+            self.settings.anti_raid_window_seconds,
+            self.settings.anti_raid_lockdown_minutes,
+            self.settings.anti_raid_account_age_minutes,
+            self.settings.anti_raid_timeout_minutes,
+        )
 
     @tasks.loop(minutes=5)
     async def cleanup_inactive_modmail(self) -> None:
@@ -1241,6 +1501,10 @@ class DyadiaGuardianBot(commands.Bot):
             return
         for user_id in stale_users:
             await self.close_modmail(user_id, self.user, "Inactivity timeout")
+
+    @cleanup_inactive_modmail.before_loop
+    async def before_cleanup_inactive_modmail(self) -> None:
+        await self.wait_until_ready()
 
 
 def main() -> None:

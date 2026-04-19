@@ -16,6 +16,13 @@ Fill these values:
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
+- Optional anti-raid tuning:
+- `ANTI_RAID_ENABLED`
+- `ANTI_RAID_JOIN_THRESHOLD`
+- `ANTI_RAID_WINDOW_SECONDS`
+- `ANTI_RAID_LOCKDOWN_MINUTES`
+- `ANTI_RAID_ACCOUNT_AGE_MINUTES`
+- `ANTI_RAID_TIMEOUT_MINUTES`
 
 ## 3. Enable Discord bot intents
 
@@ -55,6 +62,7 @@ You should see logs confirming:
 - modmail forum channel found
 - mod log channel found
 - staff application channel found
+- anti-raid config values loaded
 
 ## 7. Test modmail
 
@@ -63,3 +71,10 @@ You should see logs confirming:
 3. Click the button
 4. A forum thread should appear in your modmail forum
 5. Reply in DM and in the thread to confirm both directions work
+
+## 8. Test anti-raid
+
+1. Use `/antiraid status` to confirm the feature is enabled
+2. Use `/antiraid activate` to manually turn on raid mode
+3. Join with a fresh test account and confirm it gets timed out
+4. Use `/antiraid deactivate` to end raid mode

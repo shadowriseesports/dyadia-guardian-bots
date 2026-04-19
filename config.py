@@ -16,6 +16,12 @@ class Settings:
     staff_application_channel_id: int
     moderator_role_id: int
     admin_role_id: int
+    anti_raid_enabled: bool = True
+    anti_raid_join_threshold: int = 5
+    anti_raid_window_seconds: int = 20
+    anti_raid_lockdown_minutes: int = 10
+    anti_raid_account_age_minutes: int = 30
+    anti_raid_timeout_minutes: int = 30
     server_name: str = "Honor Of Kings | Northeast India"
     bot_status_text: str = "Guardian of Honor of Kings | Northeast india"
 
@@ -31,6 +37,34 @@ def _require_int(name: str) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"Environment variable {name} must be a boolean value like true/false.")
+
+
+def _get_int(name: str, default: int, *, minimum: int = 0) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        value = default
+    else:
+        try:
+            value = int(raw_value.strip())
+        except ValueError as exc:
+            raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
+
+    if value < minimum:
+        raise RuntimeError(f"Environment variable {name} must be at least {minimum}.")
+    return value
+
+
 def load_settings() -> Settings:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
@@ -43,6 +77,12 @@ def load_settings() -> Settings:
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
+        anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),
+        anti_raid_join_threshold=_get_int("ANTI_RAID_JOIN_THRESHOLD", 5, minimum=2),
+        anti_raid_window_seconds=_get_int("ANTI_RAID_WINDOW_SECONDS", 20, minimum=5),
+        anti_raid_lockdown_minutes=_get_int("ANTI_RAID_LOCKDOWN_MINUTES", 10, minimum=1),
+        anti_raid_account_age_minutes=_get_int("ANTI_RAID_ACCOUNT_AGE_MINUTES", 30, minimum=0),
+        anti_raid_timeout_minutes=_get_int("ANTI_RAID_TIMEOUT_MINUTES", 30, minimum=1),
         bot_status_text=os.getenv("BOT_STATUS_TEXT", "Guardian of Honor of Kings | Northeast india").strip()
         or "Guardian of Honor of Kings | Northeast india",
     )

@@ -1,14 +1,16 @@
 # Dyadia Guardian Bot
 
-Clean Python Discord bot for moderation and modmail.
+Clean Python Discord bot for moderation, modmail, staff applications, and anti-raid protection.
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `clear`, `modlogs`, `close`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `clear`, `modlogs`, `staffapplypanel`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup
 - Simple in-memory moderation log history
+- Staff application panel with 2-page modal workflow
+- Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
 
 ## Project Structure
 
@@ -48,5 +50,6 @@ Enable these intents for the bot:
 ## Notes
 
 - `modlogs` is in-memory only. Restarting the bot clears past entries.
-- `close` must be used inside an active modmail thread.
 - `MODMAIL_FORUM_ID` must point to a forum channel.
+- Anti-raid settings can be adjusted through `.env` without editing code.
+- Use `/antiraid status` to check whether raid mode is active.
