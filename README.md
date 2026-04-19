@@ -55,6 +55,7 @@ Enable these intents for the bot:
 - `MODMAIL_FORUM_ID` must point to a forum channel.
 - Anti-raid settings can be adjusted through `.env` without editing code.
 - Use `/antiraid status` to check whether raid mode is active.
-- Leveling data is stored in `level_data.json` in this project.
-- On Railway, `level_data.json` is not durable across fresh deploys or ephemeral filesystem resets. Use a database later if you want permanent XP.
+- Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
+- If `DATABASE_URL` is set, leveling data is stored in PostgreSQL automatically.
+- If `DATABASE_URL` is not set, leveling falls back to `level_data.json` for local use.
 - Reward roles are matched by role name, so create the reward roles in Discord using the exact names from the leveling panel.

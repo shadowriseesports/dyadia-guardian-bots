@@ -16,6 +16,8 @@ class Settings:
     staff_application_channel_id: int
     moderator_role_id: int
     admin_role_id: int
+    level_up_channel_id: int = 0
+    database_url: str = ""
     anti_raid_enabled: bool = True
     anti_raid_join_threshold: int = 5
     anti_raid_window_seconds: int = 20
@@ -65,6 +67,17 @@ def _get_int(name: str, default: int, *, minimum: int = 0) -> int:
     return value
 
 
+def _get_optional_int(name: str) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return 0
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
+
+
 def load_settings() -> Settings:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
@@ -77,6 +90,8 @@ def load_settings() -> Settings:
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
+        level_up_channel_id=_get_optional_int("LEVEL_UP_CHANNEL_ID"),
+        database_url=os.getenv("DATABASE_URL", "").strip(),
         anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),
         anti_raid_join_threshold=_get_int("ANTI_RAID_JOIN_THRESHOLD", 5, minimum=2),
         anti_raid_window_seconds=_get_int("ANTI_RAID_WINDOW_SECONDS", 20, minimum=5),

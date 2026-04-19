@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Deque, Dict, List, Optional
 
 import discord
+import psycopg
 from discord import app_commands
 from discord.ext import commands, tasks
 
@@ -367,12 +369,13 @@ class DyadiaGuardianBot(commands.Bot):
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
         self.level_cooldowns: Dict[tuple[int, int], datetime] = {}
+        self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
         self.staff_application_view = StaffApplicationView()
 
     async def setup_hook(self) -> None:
-        self.load_level_data()
+        await self.load_level_data()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -837,54 +840,113 @@ class DyadiaGuardianBot(commands.Bot):
             )
         )
 
-    def load_level_data(self) -> None:
-        self.level_data = {}
+    async def load_level_data(self) -> None:
+        self.level_data = await asyncio.to_thread(self._load_level_data_sync)
+
+    def _load_level_data_sync(self) -> Dict[int, Dict[int, LevelProgress]]:
+        if self.uses_postgres:
+            return self._load_level_data_from_postgres()
+        return self._load_level_data_from_json()
+
+    def _load_level_data_from_json(self) -> Dict[int, Dict[int, LevelProgress]]:
+        loaded_data: Dict[int, Dict[int, LevelProgress]] = {}
         if not LEVEL_DATA_PATH.exists():
-            return
+            LOGGER.info("Leveling data file %s not found. A new one will be created on first XP update.", LEVEL_DATA_PATH)
+            return loaded_data
 
         try:
             raw = json.loads(LEVEL_DATA_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             LOGGER.exception("Failed to load leveling data from %s", LEVEL_DATA_PATH)
-            return
+            return loaded_data
 
         guilds = raw if isinstance(raw, dict) else {}
         for guild_id, members in guilds.items():
+            parsed_guild = self._parse_leveling_guild_payload(guild_id, members)
+            if parsed_guild is not None:
+                loaded_data[parsed_guild[0]] = parsed_guild[1]
+
+        LOGGER.info("Loaded leveling data for %s guild(s) from %s", len(loaded_data), LEVEL_DATA_PATH)
+        return loaded_data
+
+    def _load_level_data_from_postgres(self) -> Dict[int, Dict[int, LevelProgress]]:
+        loaded_data: Dict[int, Dict[int, LevelProgress]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS level_progress (
+                            guild_id BIGINT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            xp INTEGER NOT NULL DEFAULT 0,
+                            messages INTEGER NOT NULL DEFAULT 0,
+                            last_message_at TIMESTAMPTZ NULL,
+                            PRIMARY KEY (guild_id, user_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        SELECT guild_id, user_id, xp, messages, last_message_at
+                        FROM level_progress
+                        """
+                    )
+                    for guild_id, user_id, xp, messages, last_message_at in cur.fetchall():
+                        guild_progress = loaded_data.setdefault(int(guild_id), {})
+                        guild_progress[int(user_id)] = LevelProgress(
+                            xp=max(0, int(xp)),
+                            messages=max(0, int(messages)),
+                            last_message_at=last_message_at,
+                        )
+        except Exception:
+            LOGGER.exception("Failed to load leveling data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded leveling data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def _parse_leveling_guild_payload(
+        self,
+        guild_id: object,
+        members: object,
+    ) -> Optional[tuple[int, Dict[int, LevelProgress]]]:
+        try:
+            parsed_guild_id = int(guild_id)
+        except (TypeError, ValueError):
+            return None
+
+        guild_progress: Dict[int, LevelProgress] = {}
+        if not isinstance(members, dict):
+            return parsed_guild_id, guild_progress
+
+        for user_id, payload in members.items():
             try:
-                parsed_guild_id = int(guild_id)
+                parsed_user_id = int(user_id)
             except (TypeError, ValueError):
                 continue
-
-            guild_progress: Dict[int, LevelProgress] = {}
-            if not isinstance(members, dict):
+            if not isinstance(payload, dict):
                 continue
-            for user_id, payload in members.items():
+
+            last_message_at = None
+            raw_last_message_at = payload.get("last_message_at")
+            if isinstance(raw_last_message_at, str):
                 try:
-                    parsed_user_id = int(user_id)
-                except (TypeError, ValueError):
-                    continue
-                if not isinstance(payload, dict):
-                    continue
+                    last_message_at = datetime.fromisoformat(raw_last_message_at)
+                except ValueError:
+                    last_message_at = None
 
-                last_message_at = None
-                raw_last_message_at = payload.get("last_message_at")
-                if isinstance(raw_last_message_at, str):
-                    try:
-                        last_message_at = datetime.fromisoformat(raw_last_message_at)
-                    except ValueError:
-                        last_message_at = None
+            guild_progress[parsed_user_id] = LevelProgress(
+                xp=max(0, int(payload.get("xp", 0) or 0)),
+                messages=max(0, int(payload.get("messages", 0) or 0)),
+                last_message_at=last_message_at,
+            )
 
-                guild_progress[parsed_user_id] = LevelProgress(
-                    xp=max(0, int(payload.get("xp", 0) or 0)),
-                    messages=max(0, int(payload.get("messages", 0) or 0)),
-                    last_message_at=last_message_at,
-                )
-
-            self.level_data[parsed_guild_id] = guild_progress
-
-        LOGGER.info("Loaded leveling data for %s guild(s) from %s", len(self.level_data), LEVEL_DATA_PATH)
+        return parsed_guild_id, guild_progress
 
     def save_level_data(self) -> None:
+        if self.uses_postgres:
+            return
         serialized: Dict[str, Dict[str, Dict[str, object]]] = {}
         for guild_id, members in self.level_data.items():
             serialized[str(guild_id)] = {}
@@ -899,6 +961,31 @@ class DyadiaGuardianBot(commands.Bot):
             LEVEL_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
         except OSError:
             LOGGER.exception("Failed to save leveling data to %s", LEVEL_DATA_PATH)
+
+    async def persist_level_progress(self, guild_id: int, user_id: int, progress: LevelProgress) -> None:
+        if self.uses_postgres:
+            await asyncio.to_thread(self._persist_level_progress_postgres, guild_id, user_id, progress)
+            return
+        await asyncio.to_thread(self.save_level_data)
+
+    def _persist_level_progress_postgres(self, guild_id: int, user_id: int, progress: LevelProgress) -> None:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO level_progress (guild_id, user_id, xp, messages, last_message_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (guild_id, user_id) DO UPDATE
+                        SET xp = EXCLUDED.xp,
+                            messages = EXCLUDED.messages,
+                            last_message_at = EXCLUDED.last_message_at
+                        """,
+                        (guild_id, user_id, progress.xp, progress.messages, progress.last_message_at),
+                    )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to persist leveling progress for guild=%s user=%s", guild_id, user_id)
 
     def get_level_progress(self, guild_id: int, user_id: int) -> LevelProgress:
         guild_progress = self.level_data.setdefault(guild_id, {})
@@ -970,7 +1057,7 @@ class DyadiaGuardianBot(commands.Bot):
         progress.messages += 1
         progress.last_message_at = now
         self.level_cooldowns[cooldown_key] = now
-        self.save_level_data()
+        await self.persist_level_progress(member.guild.id, member.id, progress)
 
         new_level = level_from_xp(progress.xp)
         return old_level, new_level
@@ -1000,7 +1087,31 @@ class DyadiaGuardianBot(commands.Bot):
         )
         if next_reward:
             embed.add_field(name="Next Rank", value=next_reward, inline=False)
-        await message.channel.send(embed=embed, delete_after=20)
+        await self.send_level_up_announcement(message.guild, message.channel, embed)
+
+    async def send_level_up_announcement(
+        self,
+        guild: discord.Guild,
+        fallback_channel: discord.abc.Messageable,
+        embed: discord.Embed,
+    ) -> None:
+        if self.settings.level_up_channel_id:
+            try:
+                channel = self.get_channel(self.settings.level_up_channel_id)
+                if channel is None:
+                    channel = await self.fetch_channel(self.settings.level_up_channel_id)
+                if isinstance(channel, discord.TextChannel):
+                    await channel.send(embed=embed)
+                    return
+                LOGGER.warning(
+                    "LEVEL_UP_CHANNEL_ID is not a text channel: %s",
+                    self.settings.level_up_channel_id,
+                )
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
+
+        if isinstance(fallback_channel, (discord.TextChannel, discord.Thread)):
+            await fallback_channel.send(embed=embed, delete_after=20)
 
     def create_rank_embed(self, member: discord.Member) -> discord.Embed:
         progress = self.get_level_progress(member.guild.id, member.id)
@@ -1864,6 +1975,28 @@ class DyadiaGuardianBot(commands.Bot):
                 "Could not fetch staff application channel %s",
                 self.settings.staff_application_channel_id,
             )
+
+        if self.settings.level_up_channel_id:
+            try:
+                level_up_channel = self.get_channel(self.settings.level_up_channel_id) or await self.fetch_channel(
+                    self.settings.level_up_channel_id
+                )
+                if isinstance(level_up_channel, discord.TextChannel):
+                    LOGGER.info(
+                        "Level-up channel found: %s (%s)",
+                        level_up_channel.name,
+                        level_up_channel.id,
+                    )
+                else:
+                    LOGGER.warning(
+                        "LEVEL_UP_CHANNEL_ID is not a text channel: %s",
+                        self.settings.level_up_channel_id,
+                    )
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
+        else:
+            LOGGER.info("LEVEL_UP_CHANNEL_ID not set. Level-up messages will use the source chat channel.")
+
         LOGGER.info(
             "Anti-raid config | enabled=%s threshold=%s window=%ss lockdown=%sm account_age=%sm timeout=%sm",
             self.settings.anti_raid_enabled,
@@ -1872,6 +2005,10 @@ class DyadiaGuardianBot(commands.Bot):
             self.settings.anti_raid_lockdown_minutes,
             self.settings.anti_raid_account_age_minutes,
             self.settings.anti_raid_timeout_minutes,
+        )
+        LOGGER.info(
+            "Leveling storage backend: %s",
+            "PostgreSQL" if self.uses_postgres else f"JSON file ({LEVEL_DATA_PATH})",
         )
 
     @tasks.loop(minutes=5)

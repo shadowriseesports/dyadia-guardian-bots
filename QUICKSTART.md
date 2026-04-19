@@ -16,6 +16,8 @@ Fill these values:
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
+- `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
+- `DATABASE_URL` if you want PostgreSQL-backed leveling on Railway
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -62,8 +64,10 @@ You should see logs confirming:
 - modmail forum channel found
 - mod log channel found
 - staff application channel found
+- level-up channel found or source-channel fallback selected
 - anti-raid config values loaded
 - leveling data file loaded or created
+- leveling storage backend selected
 
 ## 7. Test modmail
 
@@ -90,4 +94,4 @@ You should see logs confirming:
 
 ## 10. Railway note
 
-`level_data.json` is a local file. It works for local hosting, but Railway can reset that file on redeploys or container replacement. Move leveling data to a database later if you want permanent XP.
+If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling data will be stored in PostgreSQL automatically. Without `DATABASE_URL`, the bot falls back to `level_data.json` for local use.
