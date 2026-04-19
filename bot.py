@@ -36,7 +36,6 @@ DEFAULT_THUMBNAIL_URL = (
 )
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 LEVEL_DATA_PATH = Path("level_data.json")
-LEVEL_XP_COOLDOWN_SECONDS = 60
 LEVEL_XP_GAIN_MIN = 15
 LEVEL_XP_GAIN_MAX = 25
 LEADERBOARD_LIMIT = 10
@@ -162,6 +161,32 @@ def get_reward_role_name(level: int) -> Optional[str]:
         else:
             break
     return reward_name
+
+
+def find_reward_role(guild: discord.Guild, role_name: str, required_level: int) -> Optional[discord.Role]:
+    exact_match = discord.utils.get(guild.roles, name=role_name)
+    if exact_match is not None:
+        return exact_match
+
+    level_marker = f"[lvl {required_level}]".lower()
+    normalized_target = role_name.lower()
+    for role in guild.roles:
+        normalized_name = role.name.lower()
+        if normalized_name == normalized_target:
+            return role
+        if level_marker in normalized_name:
+            return role
+    return None
+
+
+def is_reward_role(role: discord.Role) -> bool:
+    normalized_name = role.name.lower()
+    for required_level, role_name in LEVEL_REWARD_ROLES:
+        if normalized_name == role_name.lower():
+            return True
+        if f"[lvl {required_level}]".lower() in normalized_name:
+            return True
+    return False
 
 
 def make_embed(
@@ -368,7 +393,6 @@ class DyadiaGuardianBot(commands.Bot):
         self.mod_logs: List[ModLogEntry] = []
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
-        self.level_cooldowns: Dict[tuple[int, int], datetime] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
@@ -738,7 +762,7 @@ class DyadiaGuardianBot(commands.Bot):
     def create_leveling_panel_embed(self, guild: discord.Guild) -> discord.Embed:
         reward_lines = []
         for required_level, role_name in LEVEL_REWARD_ROLES:
-            role = discord.utils.get(guild.roles, name=role_name)
+            role = find_reward_role(guild, role_name, required_level)
             role_display = role.mention if role is not None else role_name
             reward_lines.append(f"Level {required_level} - {role_display}")
 
@@ -766,7 +790,7 @@ class DyadiaGuardianBot(commands.Bot):
             name="XP Rules",
             value=(
                 f"- Gain {LEVEL_XP_GAIN_MIN}-{LEVEL_XP_GAIN_MAX} XP for active messages\n"
-                f"- XP can be earned once every {LEVEL_XP_COOLDOWN_SECONDS} seconds per member\n"
+                "- Every qualifying message can earn XP\n"
                 "- Only the most dedicated members will reach Level 1000"
             ),
             inline=False,
@@ -1005,10 +1029,13 @@ class DyadiaGuardianBot(commands.Bot):
         progress = self.get_level_progress(member.guild.id, member.id)
         level = level_from_xp(progress.xp)
         eligible_role_name = get_reward_role_name(level)
-        reward_role_names = {role_name for _, role_name in LEVEL_REWARD_ROLES}
-        roles_to_remove = [role for role in member.roles if role.name in reward_role_names]
-
-        role_to_add = discord.utils.get(member.guild.roles, name=eligible_role_name) if eligible_role_name else None
+        roles_to_remove = [role for role in member.roles if is_reward_role(role)]
+        eligible_level = next((required_level for required_level, role_name in LEVEL_REWARD_ROLES if role_name == eligible_role_name), None)
+        role_to_add = (
+            find_reward_role(member.guild, eligible_role_name, eligible_level)
+            if eligible_role_name is not None and eligible_level is not None
+            else None
+        )
         if role_to_add is not None and role_to_add in roles_to_remove:
             roles_to_remove.remove(role_to_add)
 
@@ -1045,18 +1072,12 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def award_message_xp(self, member: discord.Member) -> Optional[tuple[int, int]]:
         now = utc_now()
-        cooldown_key = (member.guild.id, member.id)
-        last_award = self.level_cooldowns.get(cooldown_key)
-        if last_award is not None and (now - last_award) < timedelta(seconds=LEVEL_XP_COOLDOWN_SECONDS):
-            return None
-
         progress = self.get_level_progress(member.guild.id, member.id)
         old_level = level_from_xp(progress.xp)
         gained_xp = random.randint(LEVEL_XP_GAIN_MIN, LEVEL_XP_GAIN_MAX)
         progress.xp += gained_xp
         progress.messages += 1
         progress.last_message_at = now
-        self.level_cooldowns[cooldown_key] = now
         await self.persist_level_progress(member.guild.id, member.id, progress)
 
         new_level = level_from_xp(progress.xp)
