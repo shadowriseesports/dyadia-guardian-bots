@@ -1,6 +1,6 @@
 # Dyadia Guardian Bot
 
-Clean Python Discord bot for moderation, modmail, staff applications, anti-raid protection, and chat-based leveling.
+Clean Python Discord bot for moderation, modmail, staff applications, anti-raid protection, server activity logs, and chat-based leveling.
 
 ## Kept Features
 
@@ -9,6 +9,7 @@ Clean Python Discord bot for moderation, modmail, staff applications, anti-raid 
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup
 - Simple in-memory moderation log history
+- Server activity logs for joins, leaves, message edits/deletions, channel create/delete events, role updates, nickname changes, voice joins/leaves, and ban/unban events
 - Staff application panel with 2-page modal workflow
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
 - Persistent local leveling data with `/rank`, `/leaderboard`, and `/levelpanel`
@@ -55,6 +56,7 @@ Enable these intents for the bot:
 - `MODMAIL_FORUM_ID` must point to a forum channel.
 - Anti-raid settings can be adjusted through `.env` without editing code.
 - Use `/antiraid status` to check whether raid mode is active.
+- Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
 - Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
 - If `DATABASE_URL` is set, leveling data is stored in PostgreSQL automatically.

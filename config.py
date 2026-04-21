@@ -16,6 +16,7 @@ class Settings:
     staff_application_channel_id: int
     moderator_role_id: int
     admin_role_id: int
+    server_log_channel_id: int = 0
     level_up_channel_id: int = 0
     database_url: str = ""
     level_xp_increment: int = 10
@@ -88,6 +89,7 @@ def load_settings() -> Settings:
         discord_token=token,
         modmail_forum_id=_require_int("MODMAIL_FORUM_ID"),
         mod_log_channel_id=_require_int("MOD_LOG_CHANNEL_ID"),
+        server_log_channel_id=_get_optional_int("SERVER_LOG_CHANNEL_ID"),
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),

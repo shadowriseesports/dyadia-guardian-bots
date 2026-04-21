@@ -13,6 +13,7 @@ Fill these values:
 - `DISCORD_TOKEN`
 - `MODMAIL_FORUM_ID`
 - `MOD_LOG_CHANNEL_ID`
+- `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a separate text channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
@@ -64,6 +65,7 @@ You should see logs confirming:
 - slash commands synced
 - modmail forum channel found
 - mod log channel found
+- server log channel found or mod-log fallback selected
 - staff application channel found
 - level-up channel found or source-channel fallback selected
 - anti-raid config values loaded

@@ -202,6 +202,12 @@ def make_embed(
     return embed
 
 
+def truncate_text(value: str, limit: int = 1000) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: limit - 3]}..."
+
+
 class OpenModmailView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -378,6 +384,7 @@ class DyadiaGuardianBot(commands.Bot):
         intents.members = True
         intents.message_content = True
         intents.dm_messages = True
+        intents.voice_states = True
 
         super().__init__(
             command_prefix=commands.when_mentioned,
@@ -450,8 +457,41 @@ class DyadiaGuardianBot(commands.Bot):
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None:
             return
+        await self.log_member_join(member)
         await self.handle_anti_raid_join(member)
         await self.sync_level_reward_role(member, announce=False)
+
+    async def on_member_remove(self, member: discord.Member) -> None:
+        await self.log_member_leave(member)
+
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        await self.log_member_profile_update(before, after)
+
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        await self.log_voice_state_update(member, before, after)
+
+    async def on_member_ban(self, guild: discord.Guild, user: discord.User) -> None:
+        await self.log_member_ban(guild, user)
+
+    async def on_member_unban(self, guild: discord.Guild, user: discord.User) -> None:
+        await self.log_member_unban(guild, user)
+
+    async def on_message_delete(self, message: discord.Message) -> None:
+        await self.log_message_delete(message)
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        await self.log_message_edit(before, after)
+
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        await self.log_channel_event("Channel Created", channel, discord.Color.green())
+
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        await self.log_channel_event("Channel Deleted", channel, discord.Color.red())
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         if interaction.type is discord.InteractionType.component:
@@ -834,6 +874,181 @@ class DyadiaGuardianBot(commands.Bot):
             await channel.send(embed=embed)
         else:
             LOGGER.warning("Configured mod log channel is not a text channel: %s", self.settings.mod_log_channel_id)
+
+    async def get_server_log_channel(self) -> Optional[discord.TextChannel]:
+        channel_id = self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch server log channel %s", channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+        LOGGER.warning("Configured server log channel is not a text channel: %s", channel_id)
+        return None
+
+    async def send_server_log(self, embed: discord.Embed) -> None:
+        channel = await self.get_server_log_channel()
+        if channel is not None:
+            await channel.send(embed=embed)
+
+    def create_server_log_embed(self, title: str, color: discord.Color) -> discord.Embed:
+        embed = discord.Embed(title=title, color=color, timestamp=utc_now())
+        embed.set_footer(text=BRAND_FOOTER)
+        embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
+        return embed
+
+    def format_role_list(self, roles: List[discord.Role]) -> str:
+        if not roles:
+            return "None"
+        sorted_roles = sorted(roles, key=lambda role: role.position, reverse=True)
+        return truncate_text(", ".join(role.mention for role in sorted_roles), 1024)
+
+    def format_voice_channel(self, channel: Optional[discord.abc.Connectable]) -> str:
+        if channel is None:
+            return "None"
+        mention = getattr(channel, "mention", None)
+        if mention is not None:
+            return f"{mention} ({channel.name})"
+        return f"{channel.name} ({channel.id})"
+
+    async def log_member_join(self, member: discord.Member) -> None:
+        embed = self.create_server_log_embed("Member Joined", discord.Color.green())
+        embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
+        embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "F"), inline=False)
+        embed.add_field(name="Joined Server", value=discord.utils.format_dt(utc_now(), "F"), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_member_leave(self, member: discord.Member) -> None:
+        embed = self.create_server_log_embed("Member Left", discord.Color.orange())
+        embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
+        if member.joined_at is not None:
+            embed.add_field(name="Joined Server", value=discord.utils.format_dt(member.joined_at, "F"), inline=False)
+        if member.roles:
+            role_mentions = [role.mention for role in member.roles if role != member.guild.default_role]
+            if role_mentions:
+                embed.add_field(name="Roles", value=truncate_text(", ".join(role_mentions), 1024), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_member_profile_update(self, before: discord.Member, after: discord.Member) -> None:
+        if before.nick != after.nick:
+            embed = self.create_server_log_embed("Nickname Changed", discord.Color.blurple())
+            embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
+            embed.add_field(name="Before", value=before.nick or before.name, inline=True)
+            embed.add_field(name="After", value=after.nick or after.name, inline=True)
+            await self.send_server_log(embed)
+
+        before_roles = {
+            role.id: role
+            for role in before.roles
+            if role != before.guild.default_role
+        }
+        after_roles = {
+            role.id: role
+            for role in after.roles
+            if role != after.guild.default_role
+        }
+        added_roles = [role for role_id, role in after_roles.items() if role_id not in before_roles]
+        removed_roles = [role for role_id, role in before_roles.items() if role_id not in after_roles]
+        if not added_roles and not removed_roles:
+            return
+
+        embed = self.create_server_log_embed("Roles Updated", discord.Color.teal())
+        embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
+        if added_roles:
+            embed.add_field(name="Added", value=self.format_role_list(added_roles), inline=False)
+        if removed_roles:
+            embed.add_field(name="Removed", value=self.format_role_list(removed_roles), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        if before.channel == after.channel:
+            return
+
+        if before.channel is None and after.channel is not None:
+            title = "Voice Joined"
+            color = discord.Color.green()
+        elif before.channel is not None and after.channel is None:
+            title = "Voice Left"
+            color = discord.Color.orange()
+        else:
+            title = "Voice Moved"
+            color = discord.Color.blurple()
+
+        embed = self.create_server_log_embed(title, color)
+        embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
+        embed.add_field(name="Before", value=self.format_voice_channel(before.channel), inline=True)
+        embed.add_field(name="After", value=self.format_voice_channel(after.channel), inline=True)
+        await self.send_server_log(embed)
+
+    async def log_member_ban(self, guild: discord.Guild, user: discord.User) -> None:
+        embed = self.create_server_log_embed("Member Banned", discord.Color.dark_red())
+        embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
+        embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+        await self.send_server_log(embed)
+
+    async def log_member_unban(self, guild: discord.Guild, user: discord.User) -> None:
+        embed = self.create_server_log_embed("Member Unbanned", discord.Color.green())
+        embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
+        embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+        await self.send_server_log(embed)
+
+    async def log_message_delete(self, message: discord.Message) -> None:
+        if message.guild is None or message.author.bot:
+            return
+        if isinstance(message.channel, discord.Thread):
+            channel_value = f"{message.channel.mention} (thread)"
+        elif isinstance(message.channel, discord.TextChannel):
+            channel_value = message.channel.mention
+        else:
+            channel_value = str(message.channel)
+        embed = self.create_server_log_embed("Message Deleted", discord.Color.red())
+        embed.add_field(name="Author", value=f"{message.author} ({message.author.id})", inline=False)
+        embed.add_field(name="Channel", value=channel_value, inline=False)
+        content = message.content.strip() if message.content else ""
+        embed.add_field(name="Content", value=truncate_text(content or "[no text content]", 1024), inline=False)
+        if message.attachments:
+            filenames = ", ".join(attachment.filename for attachment in message.attachments)
+            embed.add_field(name="Attachments", value=truncate_text(filenames, 1024), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        if before.guild is None or before.author.bot:
+            return
+        if before.content == after.content:
+            return
+        if isinstance(before.channel, discord.Thread):
+            channel_value = f"{before.channel.mention} (thread)"
+        elif isinstance(before.channel, discord.TextChannel):
+            channel_value = before.channel.mention
+        else:
+            channel_value = str(before.channel)
+        embed = self.create_server_log_embed("Message Edited", discord.Color.gold())
+        embed.add_field(name="Author", value=f"{before.author} ({before.author.id})", inline=False)
+        embed.add_field(name="Channel", value=channel_value, inline=False)
+        embed.add_field(name="Before", value=truncate_text(before.content or "[no text content]", 1024), inline=False)
+        embed.add_field(name="After", value=truncate_text(after.content or "[no text content]", 1024), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_channel_event(
+        self,
+        action: str,
+        channel: discord.abc.GuildChannel,
+        color: discord.Color,
+    ) -> None:
+        embed = self.create_server_log_embed(action, color)
+        embed.add_field(name="Channel", value=f"{channel.name} ({channel.id})", inline=False)
+        embed.add_field(name="Type", value=str(channel.type), inline=False)
+        category = channel.category.name if channel.category is not None else "No category"
+        embed.add_field(name="Category", value=category, inline=False)
+        await self.send_server_log(embed)
 
     async def get_staff_application_channel(self) -> Optional[discord.TextChannel]:
         channel = self.get_channel(self.settings.staff_application_channel_id)
@@ -1976,6 +2191,19 @@ class DyadiaGuardianBot(commands.Bot):
                 LOGGER.warning("MOD_LOG_CHANNEL_ID is not a text channel: %s", self.settings.mod_log_channel_id)
         except discord.HTTPException:
             LOGGER.exception("Could not fetch mod log channel %s", self.settings.mod_log_channel_id)
+
+        server_log_channel_id = self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+        if self.settings.server_log_channel_id:
+            try:
+                server_log_channel = self.get_channel(server_log_channel_id) or await self.fetch_channel(server_log_channel_id)
+                if isinstance(server_log_channel, discord.TextChannel):
+                    LOGGER.info("Server log channel found: %s (%s)", server_log_channel.name, server_log_channel.id)
+                else:
+                    LOGGER.warning("SERVER_LOG_CHANNEL_ID is not a text channel: %s", server_log_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch server log channel %s", server_log_channel_id)
+        else:
+            LOGGER.info("SERVER_LOG_CHANNEL_ID not set. Server logs will use MOD_LOG_CHANNEL_ID.")
 
         try:
             application_channel = self.get_channel(self.settings.staff_application_channel_id) or await self.fetch_channel(
