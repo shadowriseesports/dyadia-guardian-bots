@@ -57,6 +57,7 @@ Enable these intents for the bot:
 - Anti-raid settings can be adjusted through `.env` without editing code.
 - Use `/antiraid status` to check whether raid mode is active.
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
+- Set `INVITE_LOG_CHANNEL_ID` if you want invite create/delete and invite-used join logs in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
 - If `DATABASE_URL` is set, leveling and invite tracking data are stored in PostgreSQL automatically.

@@ -471,7 +471,9 @@ class DyadiaGuardianBot(commands.Bot):
         if member.guild is None:
             return
         invite_info = await self.track_member_invite(member)
-        await self.log_member_join(member, invite_info)
+        await self.log_member_join(member)
+        if invite_info is not None:
+            await self.log_invite_join(member, invite_info)
         await self.handle_anti_raid_join(member)
         await self.sync_level_reward_role(member, announce=False)
 
@@ -987,8 +989,27 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured server log channel is not a text channel: %s", channel_id)
         return None
 
+    async def get_invite_log_channel(self) -> Optional[discord.TextChannel]:
+        channel_id = self.settings.invite_log_channel_id or self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch invite log channel %s", channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+        LOGGER.warning("Configured invite log channel is not a text channel: %s", channel_id)
+        return None
+
     async def send_server_log(self, embed: discord.Embed) -> None:
         channel = await self.get_server_log_channel()
+        if channel is not None:
+            await channel.send(embed=embed)
+
+    async def send_invite_log(self, embed: discord.Embed) -> None:
+        channel = await self.get_invite_log_channel()
         if channel is not None:
             await channel.send(embed=embed)
 
@@ -1056,14 +1077,18 @@ class DyadiaGuardianBot(commands.Bot):
             parts.append("Expires After: Never")
         return "\n".join(parts)
 
-    async def log_member_join(self, member: discord.Member, invite_info: Optional[str] = None) -> None:
+    async def log_member_join(self, member: discord.Member) -> None:
         embed = self.create_server_log_embed("Member Joined", discord.Color.green())
         embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
         embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "F"), inline=False)
         embed.add_field(name="Joined Server", value=discord.utils.format_dt(utc_now(), "F"), inline=False)
-        if invite_info is not None:
-            embed.add_field(name="Invite Used", value=truncate_text(invite_info, 1024), inline=False)
         await self.send_server_log(embed)
+
+    async def log_invite_join(self, member: discord.Member, invite_info: str) -> None:
+        embed = self.create_server_log_embed("Invite Used", discord.Color.green())
+        embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
+        embed.add_field(name="Invite", value=truncate_text(invite_info, 1024), inline=False)
+        await self.send_invite_log(embed)
 
     async def log_member_leave(self, member: discord.Member) -> None:
         embed = self.create_server_log_embed("Member Left", discord.Color.orange())
@@ -1307,7 +1332,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_server_log_embed("Invite Created", discord.Color.green())
         embed.add_field(name="Invite Info", value=truncate_text(self.describe_invite(invite), 1024), inline=False)
         embed.add_field(name="Server", value=f"{invite.guild.name} ({invite.guild.id})", inline=False)
-        await self.send_server_log(embed)
+        await self.send_invite_log(embed)
 
     async def log_invite_delete(self, invite: discord.Invite) -> None:
         if invite.guild is None:
@@ -1315,7 +1340,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_server_log_embed("Invite Deleted", discord.Color.red())
         embed.add_field(name="Invite Info", value=truncate_text(self.describe_invite(invite), 1024), inline=False)
         embed.add_field(name="Server", value=f"{invite.guild.name} ({invite.guild.id})", inline=False)
-        await self.send_server_log(embed)
+        await self.send_invite_log(embed)
 
     async def log_moderator_command(
         self,
@@ -2767,6 +2792,23 @@ class DyadiaGuardianBot(commands.Bot):
                 LOGGER.exception("Could not fetch server log channel %s", server_log_channel_id)
         else:
             LOGGER.info("SERVER_LOG_CHANNEL_ID not set. Server logs will use MOD_LOG_CHANNEL_ID.")
+
+        invite_log_channel_id = (
+            self.settings.invite_log_channel_id
+            or self.settings.server_log_channel_id
+            or self.settings.mod_log_channel_id
+        )
+        if self.settings.invite_log_channel_id:
+            try:
+                invite_log_channel = self.get_channel(invite_log_channel_id) or await self.fetch_channel(invite_log_channel_id)
+                if isinstance(invite_log_channel, discord.TextChannel):
+                    LOGGER.info("Invite log channel found: %s (%s)", invite_log_channel.name, invite_log_channel.id)
+                else:
+                    LOGGER.warning("INVITE_LOG_CHANNEL_ID is not a text channel: %s", invite_log_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch invite log channel %s", invite_log_channel_id)
+        else:
+            LOGGER.info("INVITE_LOG_CHANNEL_ID not set. Invite logs will use SERVER_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID.")
 
         try:
             application_channel = self.get_channel(self.settings.staff_application_channel_id) or await self.fetch_channel(
