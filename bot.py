@@ -663,7 +663,7 @@ class DyadiaGuardianBot(commands.Bot):
         @app_commands.describe(amount="How many recent messages to remove", user="Only remove messages from this user")
         async def clear(
             interaction: discord.Interaction,
-            amount: app_commands.Range[int, 1, 100],
+            amount: app_commands.Range[int, 1, 1000],
             user: Optional[discord.Member] = None,
         ) -> None:
             await self.handle_clear(interaction, amount, user)
@@ -1780,7 +1780,7 @@ class DyadiaGuardianBot(commands.Bot):
             remaining -= 1
             return True
 
-        deleted = await interaction.channel.purge(limit=min(100, amount + 50), check=should_delete, bulk=True)
+        deleted = await interaction.channel.purge(limit=min(1000, amount + 200), check=should_delete, bulk=True)
         target = user or interaction.user
         embed = self.create_modlog_embed("CLEAR", target, interaction.user, f"Cleared {len(deleted)} message(s)")
         await self.send_modlog(embed)
