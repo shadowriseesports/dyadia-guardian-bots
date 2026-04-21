@@ -18,7 +18,7 @@ Fill these values:
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
-- `DATABASE_URL` if you want PostgreSQL-backed leveling on Railway
+- `DATABASE_URL` if you want PostgreSQL-backed leveling and invite tracking on Railway
 - `LEVEL_XP_INCREMENT` to control how much extra XP each next level requires
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
@@ -94,7 +94,8 @@ You should see logs confirming:
 3. Chat with a member account in the server for a few minutes
 4. Use `/rank` to confirm XP and level progress
 5. Use `/leaderboard` to confirm the server ranking updates
+6. Use `/invites` and `/inviteleaderboard` after a tracked invite join
 
 ## 10. Railway note
 
-If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling data will be stored in PostgreSQL automatically. Without `DATABASE_URL`, the bot falls back to `level_data.json` for local use.
+If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling and invite tracking data will be stored in PostgreSQL automatically. Without `DATABASE_URL`, the bot falls back to `level_data.json` and `invite_data.json` for local use.

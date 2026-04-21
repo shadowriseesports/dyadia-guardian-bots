@@ -36,6 +36,7 @@ DEFAULT_THUMBNAIL_URL = (
 )
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 LEVEL_DATA_PATH = Path("level_data.json")
+INVITE_DATA_PATH = Path("invite_data.json")
 LEVEL_XP_GAIN_MIN = 15
 LEVEL_XP_GAIN_MAX = 25
 LEADERBOARD_LIMIT = 10
@@ -104,6 +105,14 @@ class LevelProgress:
     xp: int = 0
     messages: int = 0
     last_message_at: Optional[datetime] = None
+
+
+@dataclass
+class InviteSnapshot:
+    code: str
+    uses: int
+    inviter_id: Optional[int] = None
+    channel_id: Optional[int] = None
 
 
 def utc_now() -> datetime:
@@ -400,6 +409,8 @@ class DyadiaGuardianBot(commands.Bot):
         self.mod_logs: List[ModLogEntry] = []
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
+        self.invite_counts: Dict[int, Dict[int, int]] = {}
+        self.invite_cache: Dict[int, Dict[str, InviteSnapshot]] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
@@ -407,6 +418,7 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.load_level_data()
+        await self.load_invite_data()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -421,6 +433,7 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.info("Bot online as %s (%s)", self.user, self.user.id if self.user else "unknown")
         LOGGER.info("Synced %s application commands", len(synced))
         await self.validate_runtime_configuration()
+        await self.refresh_invite_caches()
 
     async def on_app_command_error(
         self,
@@ -457,7 +470,8 @@ class DyadiaGuardianBot(commands.Bot):
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None:
             return
-        await self.log_member_join(member)
+        invite_info = await self.track_member_invite(member)
+        await self.log_member_join(member, invite_info)
         await self.handle_anti_raid_join(member)
         await self.sync_level_reward_role(member, announce=False)
 
@@ -519,9 +533,13 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def on_invite_create(self, invite: discord.Invite) -> None:
         await self.log_invite_create(invite)
+        if invite.guild is not None:
+            await self.cache_guild_invites(invite.guild)
 
     async def on_invite_delete(self, invite: discord.Invite) -> None:
         await self.log_invite_delete(invite)
+        if invite.guild is not None:
+            await self.cache_guild_invites(invite.guild)
 
     async def on_bulk_message_delete(self, messages: List[discord.Message]) -> None:
         await self.log_bulk_message_delete(messages)
@@ -620,7 +638,9 @@ class DyadiaGuardianBot(commands.Bot):
                 value=(
                     "`/rank` view your level card\n"
                     "`/leaderboard` view the top XP members\n"
-                    "`/levelpanel` post the leveling system information panel"
+                    "`/levelpanel` post the leveling system information panel\n"
+                    "`/invites` view invite count\n"
+                    "`/inviteleaderboard` view top inviters"
                 ),
                 inline=False,
             )
@@ -711,6 +731,15 @@ class DyadiaGuardianBot(commands.Bot):
         @tree.command(name="leaderboard", description="Show the server leveling leaderboard")
         async def leaderboard(interaction: discord.Interaction) -> None:
             await self.handle_leaderboard(interaction)
+
+        @tree.command(name="invites", description="Show how many joins a member has invited")
+        @app_commands.describe(user="Optional member to inspect")
+        async def invites(interaction: discord.Interaction, user: Optional[discord.Member] = None) -> None:
+            await self.handle_invites(interaction, user)
+
+        @tree.command(name="inviteleaderboard", description="Show the server invite leaderboard")
+        async def inviteleaderboard(interaction: discord.Interaction) -> None:
+            await self.handle_invite_leaderboard(interaction)
 
         @tree.command(name="levelpanel", description="Post the leveling system info panel")
         @app_commands.describe(channel="Channel where the leveling panel should be posted")
@@ -1027,11 +1056,13 @@ class DyadiaGuardianBot(commands.Bot):
             parts.append("Expires After: Never")
         return "\n".join(parts)
 
-    async def log_member_join(self, member: discord.Member) -> None:
+    async def log_member_join(self, member: discord.Member, invite_info: Optional[str] = None) -> None:
         embed = self.create_server_log_embed("Member Joined", discord.Color.green())
         embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
         embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "F"), inline=False)
         embed.add_field(name="Joined Server", value=discord.utils.format_dt(utc_now(), "F"), inline=False)
+        if invite_info is not None:
+            embed.add_field(name="Invite Used", value=truncate_text(invite_info, 1024), inline=False)
         await self.send_server_log(embed)
 
     async def log_member_leave(self, member: discord.Member) -> None:
@@ -1331,6 +1362,178 @@ class DyadiaGuardianBot(commands.Bot):
                 duration_text=duration_text,
             )
         )
+
+    async def load_invite_data(self) -> None:
+        self.invite_counts = await asyncio.to_thread(self._load_invite_data_sync)
+
+    def _load_invite_data_sync(self) -> Dict[int, Dict[int, int]]:
+        if self.uses_postgres:
+            return self._load_invite_data_from_postgres()
+        return self._load_invite_data_from_json()
+
+    def _load_invite_data_from_json(self) -> Dict[int, Dict[int, int]]:
+        loaded_data: Dict[int, Dict[int, int]] = {}
+        if not INVITE_DATA_PATH.exists():
+            LOGGER.info("Invite data file %s not found. A new one will be created on first tracked invite.", INVITE_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(INVITE_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load invite data from %s", INVITE_DATA_PATH)
+            return loaded_data
+
+        for guild_id, members in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(members, dict):
+                continue
+            guild_counts: Dict[int, int] = {}
+            for user_id, count in members.items():
+                try:
+                    guild_counts[int(user_id)] = max(0, int(count))
+                except (TypeError, ValueError):
+                    continue
+            loaded_data[parsed_guild_id] = guild_counts
+
+        LOGGER.info("Loaded invite data for %s guild(s) from %s", len(loaded_data), INVITE_DATA_PATH)
+        return loaded_data
+
+    def _load_invite_data_from_postgres(self) -> Dict[int, Dict[int, int]]:
+        loaded_data: Dict[int, Dict[int, int]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS invite_counts (
+                            guild_id BIGINT NOT NULL,
+                            inviter_id BIGINT NOT NULL,
+                            joins INTEGER NOT NULL DEFAULT 0,
+                            PRIMARY KEY (guild_id, inviter_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        SELECT guild_id, inviter_id, joins
+                        FROM invite_counts
+                        """
+                    )
+                    for guild_id, inviter_id, joins in cur.fetchall():
+                        guild_counts = loaded_data.setdefault(int(guild_id), {})
+                        guild_counts[int(inviter_id)] = max(0, int(joins))
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to load invite data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded invite data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def save_invite_data(self) -> None:
+        if self.uses_postgres:
+            return
+        serialized = {
+            str(guild_id): {str(user_id): count for user_id, count in members.items()}
+            for guild_id, members in self.invite_counts.items()
+        }
+        try:
+            INVITE_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save invite data to %s", INVITE_DATA_PATH)
+
+    async def persist_invite_count(self, guild_id: int, inviter_id: int, joins: int) -> None:
+        if self.uses_postgres:
+            await asyncio.to_thread(self._persist_invite_count_postgres, guild_id, inviter_id, joins)
+            return
+        await asyncio.to_thread(self.save_invite_data)
+
+    def _persist_invite_count_postgres(self, guild_id: int, inviter_id: int, joins: int) -> None:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO invite_counts (guild_id, inviter_id, joins)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (guild_id, inviter_id) DO UPDATE
+                        SET joins = EXCLUDED.joins
+                        """,
+                        (guild_id, inviter_id, joins),
+                    )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to persist invite count for guild=%s inviter=%s", guild_id, inviter_id)
+
+    def get_invite_count(self, guild_id: int, inviter_id: int) -> int:
+        return self.invite_counts.setdefault(guild_id, {}).get(inviter_id, 0)
+
+    async def increment_invite_count(self, guild_id: int, inviter_id: int) -> int:
+        guild_counts = self.invite_counts.setdefault(guild_id, {})
+        guild_counts[inviter_id] = guild_counts.get(inviter_id, 0) + 1
+        await self.persist_invite_count(guild_id, inviter_id, guild_counts[inviter_id])
+        return guild_counts[inviter_id]
+
+    def snapshot_invite(self, invite: discord.Invite) -> InviteSnapshot:
+        return InviteSnapshot(
+            code=invite.code,
+            uses=invite.uses or 0,
+            inviter_id=invite.inviter.id if invite.inviter is not None else None,
+            channel_id=invite.channel.id if invite.channel is not None else None,
+        )
+
+    async def cache_guild_invites(self, guild: discord.Guild) -> None:
+        try:
+            invites = await guild.invites()
+        except discord.Forbidden:
+            LOGGER.warning("Missing Manage Server permission to track invites in %s (%s)", guild.name, guild.id)
+            self.invite_cache.setdefault(guild.id, {})
+            return
+        except discord.HTTPException:
+            LOGGER.exception("Could not fetch invites for %s (%s)", guild.name, guild.id)
+            self.invite_cache.setdefault(guild.id, {})
+            return
+
+        self.invite_cache[guild.id] = {invite.code: self.snapshot_invite(invite) for invite in invites}
+        LOGGER.info("Cached %s invite(s) for %s (%s)", len(invites), guild.name, guild.id)
+
+    async def refresh_invite_caches(self) -> None:
+        for guild in self.guilds:
+            await self.cache_guild_invites(guild)
+
+    async def track_member_invite(self, member: discord.Member) -> Optional[str]:
+        before_cache = self.invite_cache.get(member.guild.id, {})
+        try:
+            current_invites = await member.guild.invites()
+        except discord.Forbidden:
+            LOGGER.warning("Missing Manage Server permission to detect invite used by %s (%s)", member, member.id)
+            return None
+        except discord.HTTPException:
+            LOGGER.exception("Could not detect invite used by %s (%s)", member, member.id)
+            return None
+
+        after_cache = {invite.code: self.snapshot_invite(invite) for invite in current_invites}
+        used_invite: Optional[InviteSnapshot] = None
+        highest_delta = 0
+        for code, after_snapshot in after_cache.items():
+            before_snapshot = before_cache.get(code)
+            before_uses = before_snapshot.uses if before_snapshot is not None else after_snapshot.uses
+            delta = after_snapshot.uses - before_uses
+            if delta > highest_delta:
+                highest_delta = delta
+                used_invite = after_snapshot
+
+        self.invite_cache[member.guild.id] = after_cache
+        if used_invite is None or used_invite.inviter_id is None:
+            return None
+
+        total_joins = await self.increment_invite_count(member.guild.id, used_invite.inviter_id)
+        inviter_text = f"<@{used_invite.inviter_id}>"
+        channel_text = f"<#{used_invite.channel_id}>" if used_invite.channel_id is not None else "Unknown channel"
+        return f"Code `{used_invite.code}` from {inviter_text} in {channel_text}\nInviter total: **{total_joins}**"
 
     async def load_level_data(self) -> None:
         self.level_data = await asyncio.to_thread(self._load_level_data_sync)
@@ -1935,6 +2138,48 @@ class DyadiaGuardianBot(commands.Bot):
 
         embed = make_embed(
             "Leveling Leaderboard",
+            "\n".join(lines),
+            discord.Color.gold(),
+        )
+        await interaction.response.send_message(embed=embed)
+
+    async def handle_invites(self, interaction: discord.Interaction, user: Optional[discord.Member]) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target = user or interaction.user
+        if not isinstance(target, discord.Member):
+            await interaction.response.send_message("I could not resolve that member in this server.", ephemeral=True)
+            return
+
+        invite_count = self.get_invite_count(interaction.guild.id, target.id)
+        embed = make_embed(
+            "Invite Count",
+            f"{target.mention} has invited **{invite_count}** member{'s' if invite_count != 1 else ''}.",
+            discord.Color.blurple(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def handle_invite_leaderboard(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        guild_counts = self.invite_counts.get(interaction.guild.id, {})
+        ranked_inviters = sorted(guild_counts.items(), key=lambda item: item[1], reverse=True)[:LEADERBOARD_LIMIT]
+        if not ranked_inviters:
+            await interaction.response.send_message("No tracked invite joins yet.", ephemeral=True)
+            return
+
+        lines = []
+        for index, (user_id, joins) in enumerate(ranked_inviters, start=1):
+            member = interaction.guild.get_member(user_id)
+            display_name = member.display_name if member is not None else f"User {user_id}"
+            lines.append(f"**#{index}** {display_name} - {joins} invite{'s' if joins != 1 else ''}")
+
+        embed = make_embed(
+            "Invite Leaderboard",
             "\n".join(lines),
             discord.Color.gold(),
         )

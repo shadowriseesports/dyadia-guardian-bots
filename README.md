@@ -4,7 +4,7 @@ Clean Python Discord bot for moderation, modmail, staff applications, anti-raid 
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `staffapplypanel`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `invites`, `inviteleaderboard`, `staffapplypanel`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup
@@ -12,7 +12,7 @@ Clean Python Discord bot for moderation, modmail, staff applications, anti-raid 
 - Server activity logs for message deletes/edits, image deletes, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins/leaves/moves, and ban/unban events
 - Staff application panel with 2-page modal workflow
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
-- Persistent local leveling data with `/rank`, `/leaderboard`, and `/levelpanel`
+- Persistent leveling and invite tracking data with `/rank`, `/leaderboard`, `/levelpanel`, `/invites`, and `/inviteleaderboard`
 - Automatic rank-role rewards based on your Honor of Kings leveling ladder
 
 ## Project Structure
@@ -59,6 +59,7 @@ Enable these intents for the bot:
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
 - Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
-- If `DATABASE_URL` is set, leveling data is stored in PostgreSQL automatically.
-- If `DATABASE_URL` is not set, leveling falls back to `level_data.json` for local use.
+- If `DATABASE_URL` is set, leveling and invite tracking data are stored in PostgreSQL automatically.
+- If `DATABASE_URL` is not set, leveling falls back to `level_data.json` and invite tracking falls back to `invite_data.json` for local use.
+- Invite tracking requires the bot to have `Manage Server` permission so it can read server invites.
 - Reward roles are matched by role name, so create the reward roles in Discord using the exact names from the leveling panel.
