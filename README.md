@@ -9,7 +9,7 @@ Clean Python Discord bot for moderation, modmail, staff applications, anti-raid 
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup
 - Simple in-memory moderation log history
-- Server activity logs for joins, leaves, message edits/deletions, channel create/delete events, role updates, nickname changes, voice joins/leaves, and ban/unban events
+- Server activity logs for message deletes/edits, image deletes, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins/leaves/moves, and ban/unban events
 - Staff application panel with 2-page modal workflow
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
 - Persistent local leveling data with `/rank`, `/leaderboard`, and `/levelpanel`

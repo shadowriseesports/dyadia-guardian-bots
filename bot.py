@@ -490,8 +490,41 @@ class DyadiaGuardianBot(commands.Bot):
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
         await self.log_channel_event("Channel Created", channel, discord.Color.green())
 
+    async def on_guild_channel_update(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+    ) -> None:
+        await self.log_channel_update(before, after)
+
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         await self.log_channel_event("Channel Deleted", channel, discord.Color.red())
+
+    async def on_guild_role_create(self, role: discord.Role) -> None:
+        await self.log_role_event("Role Created", role, discord.Color.green())
+
+    async def on_guild_role_delete(self, role: discord.Role) -> None:
+        await self.log_role_event("Role Deleted", role, discord.Color.red())
+
+    async def on_guild_role_update(self, before: discord.Role, after: discord.Role) -> None:
+        await self.log_role_update(before, after)
+
+    async def on_guild_emojis_update(
+        self,
+        guild: discord.Guild,
+        before: List[discord.Emoji],
+        after: List[discord.Emoji],
+    ) -> None:
+        await self.log_emoji_update(guild, before, after)
+
+    async def on_invite_create(self, invite: discord.Invite) -> None:
+        await self.log_invite_create(invite)
+
+    async def on_invite_delete(self, invite: discord.Invite) -> None:
+        await self.log_invite_delete(invite)
+
+    async def on_bulk_message_delete(self, messages: List[discord.Message]) -> None:
+        await self.log_bulk_message_delete(messages)
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         if interaction.type is discord.InteractionType.component:
@@ -914,6 +947,50 @@ class DyadiaGuardianBot(commands.Bot):
             return f"{mention} ({channel.name})"
         return f"{channel.name} ({channel.id})"
 
+    def format_message_channel(self, channel: discord.abc.Messageable) -> str:
+        if isinstance(channel, discord.Thread):
+            return f"{channel.mention} (thread)"
+        if isinstance(channel, discord.TextChannel):
+            return channel.mention
+        return str(channel)
+
+    def format_channel(self, channel: discord.abc.GuildChannel) -> str:
+        mention = getattr(channel, "mention", None)
+        if mention is not None:
+            return f"{mention} ({channel.id})"
+        return f"{channel.name} ({channel.id})"
+
+    def get_timeout_until(self, member: discord.Member) -> Optional[datetime]:
+        value = getattr(member, "timed_out_until", None)
+        if value is None:
+            value = getattr(member, "communication_disabled_until", None)
+        return value
+
+    def is_image_attachment(self, attachment: discord.Attachment) -> bool:
+        content_type = attachment.content_type or ""
+        if content_type.startswith("image/"):
+            return True
+        return attachment.filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif"))
+
+    def add_change_field(self, embed: discord.Embed, name: str, before: object, after: object) -> None:
+        if before == after:
+            return
+        embed.add_field(name=name, value=truncate_text(f"{before} -> {after}", 1024), inline=False)
+
+    def describe_invite(self, invite: discord.Invite) -> str:
+        parts = [f"Code: `{invite.code}`"]
+        if invite.channel is not None:
+            parts.append(f"Channel: {self.format_channel(invite.channel)}")
+        if invite.inviter is not None:
+            parts.append(f"Inviter: {invite.inviter} ({invite.inviter.id})")
+        max_uses = "Unlimited" if invite.max_uses == 0 else str(invite.max_uses)
+        parts.append(f"Max Uses: {max_uses}")
+        if invite.max_age:
+            parts.append(f"Expires After: {format_duration(timedelta(seconds=invite.max_age))}")
+        else:
+            parts.append("Expires After: Never")
+        return "\n".join(parts)
+
     async def log_member_join(self, member: discord.Member) -> None:
         embed = self.create_server_log_embed("Member Joined", discord.Color.green())
         embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
@@ -940,6 +1017,17 @@ class DyadiaGuardianBot(commands.Bot):
             embed.add_field(name="After", value=after.nick or after.name, inline=True)
             await self.send_server_log(embed)
 
+        before_timeout = self.get_timeout_until(before)
+        after_timeout = self.get_timeout_until(after)
+        if before_timeout != after_timeout:
+            embed = self.create_server_log_embed("Member Timeout Updated", discord.Color.orange())
+            embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
+            before_value = discord.utils.format_dt(before_timeout, "F") if before_timeout is not None else "None"
+            after_value = discord.utils.format_dt(after_timeout, "F") if after_timeout is not None else "None"
+            embed.add_field(name="Before", value=before_value, inline=True)
+            embed.add_field(name="After", value=after_value, inline=True)
+            await self.send_server_log(embed)
+
         before_roles = {
             role.id: role
             for role in before.roles
@@ -955,13 +1043,16 @@ class DyadiaGuardianBot(commands.Bot):
         if not added_roles and not removed_roles:
             return
 
-        embed = self.create_server_log_embed("Roles Updated", discord.Color.teal())
-        embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
         if added_roles:
+            embed = self.create_server_log_embed("Member Role Added", discord.Color.green())
+            embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
             embed.add_field(name="Added", value=self.format_role_list(added_roles), inline=False)
+            await self.send_server_log(embed)
         if removed_roles:
+            embed = self.create_server_log_embed("Member Role Removed", discord.Color.red())
+            embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
             embed.add_field(name="Removed", value=self.format_role_list(removed_roles), inline=False)
-        await self.send_server_log(embed)
+            await self.send_server_log(embed)
 
     async def log_voice_state_update(
         self,
@@ -1003,20 +1094,42 @@ class DyadiaGuardianBot(commands.Bot):
     async def log_message_delete(self, message: discord.Message) -> None:
         if message.guild is None or message.author.bot:
             return
-        if isinstance(message.channel, discord.Thread):
-            channel_value = f"{message.channel.mention} (thread)"
-        elif isinstance(message.channel, discord.TextChannel):
-            channel_value = message.channel.mention
-        else:
-            channel_value = str(message.channel)
-        embed = self.create_server_log_embed("Message Deleted", discord.Color.red())
+        channel_value = self.format_message_channel(message.channel)
+        image_attachments = [attachment for attachment in message.attachments if self.is_image_attachment(attachment)]
+        title = "Image Deleted" if image_attachments else "Message Deleted"
+        embed = self.create_server_log_embed(title, discord.Color.red())
         embed.add_field(name="Author", value=f"{message.author} ({message.author.id})", inline=False)
         embed.add_field(name="Channel", value=channel_value, inline=False)
         content = message.content.strip() if message.content else ""
         embed.add_field(name="Content", value=truncate_text(content or "[no text content]", 1024), inline=False)
+        if image_attachments:
+            image_names = ", ".join(attachment.filename for attachment in image_attachments)
+            embed.add_field(name="Images", value=truncate_text(image_names, 1024), inline=False)
         if message.attachments:
             filenames = ", ".join(attachment.filename for attachment in message.attachments)
             embed.add_field(name="Attachments", value=truncate_text(filenames, 1024), inline=False)
+        await self.send_server_log(embed)
+
+    async def log_bulk_message_delete(self, messages: List[discord.Message]) -> None:
+        if not messages:
+            return
+        first_message = messages[0]
+        if first_message.guild is None:
+            return
+        channel_value = self.format_message_channel(first_message.channel)
+        user_ids = {message.author.id for message in messages if message.author is not None}
+        image_count = sum(
+            1
+            for message in messages
+            for attachment in message.attachments
+            if self.is_image_attachment(attachment)
+        )
+        embed = self.create_server_log_embed("Bulk Message Delete", discord.Color.dark_red())
+        embed.add_field(name="Channel", value=channel_value, inline=False)
+        embed.add_field(name="Deleted Messages", value=str(len(messages)), inline=True)
+        embed.add_field(name="Unique Authors", value=str(len(user_ids)), inline=True)
+        if image_count:
+            embed.add_field(name="Deleted Images", value=str(image_count), inline=True)
         await self.send_server_log(embed)
 
     async def log_message_edit(self, before: discord.Message, after: discord.Message) -> None:
@@ -1024,12 +1137,7 @@ class DyadiaGuardianBot(commands.Bot):
             return
         if before.content == after.content:
             return
-        if isinstance(before.channel, discord.Thread):
-            channel_value = f"{before.channel.mention} (thread)"
-        elif isinstance(before.channel, discord.TextChannel):
-            channel_value = before.channel.mention
-        else:
-            channel_value = str(before.channel)
+        channel_value = self.format_message_channel(before.channel)
         embed = self.create_server_log_embed("Message Edited", discord.Color.gold())
         embed.add_field(name="Author", value=f"{before.author} ({before.author.id})", inline=False)
         embed.add_field(name="Channel", value=channel_value, inline=False)
@@ -1048,6 +1156,114 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Type", value=str(channel.type), inline=False)
         category = channel.category.name if channel.category is not None else "No category"
         embed.add_field(name="Category", value=category, inline=False)
+        await self.send_server_log(embed)
+
+    async def log_channel_update(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+    ) -> None:
+        embed = self.create_server_log_embed("Channel Updated", discord.Color.gold())
+        embed.add_field(name="Channel", value=self.format_channel(after), inline=False)
+        self.add_change_field(embed, "Name", before.name, after.name)
+        self.add_change_field(embed, "Type", before.type, after.type)
+        before_category = before.category.name if before.category is not None else "No category"
+        after_category = after.category.name if after.category is not None else "No category"
+        self.add_change_field(embed, "Category", before_category, after_category)
+        for attr, label in (
+            ("position", "Position"),
+            ("slowmode_delay", "Slowmode"),
+            ("nsfw", "NSFW"),
+            ("bitrate", "Bitrate"),
+            ("user_limit", "User Limit"),
+        ):
+            if hasattr(before, attr) and hasattr(after, attr):
+                self.add_change_field(embed, label, getattr(before, attr), getattr(after, attr))
+        if len(embed.fields) > 1:
+            await self.send_server_log(embed)
+
+    async def log_role_event(self, action: str, role: discord.Role, color: discord.Color) -> None:
+        embed = self.create_server_log_embed(action, color)
+        embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
+        embed.add_field(name="Name", value=role.name, inline=True)
+        embed.add_field(name="Color", value=str(role.color), inline=True)
+        embed.add_field(name="Mentionable", value=str(role.mentionable), inline=True)
+        await self.send_server_log(embed)
+
+    async def log_role_update(self, before: discord.Role, after: discord.Role) -> None:
+        embed = self.create_server_log_embed("Role Updated", discord.Color.gold())
+        embed.add_field(name="Role", value=f"{after.mention} ({after.id})", inline=False)
+        self.add_change_field(embed, "Name", before.name, after.name)
+        self.add_change_field(embed, "Color", before.color, after.color)
+        self.add_change_field(embed, "Hoisted", before.hoist, after.hoist)
+        self.add_change_field(embed, "Mentionable", before.mentionable, after.mentionable)
+        self.add_change_field(embed, "Permissions", before.permissions.value, after.permissions.value)
+        if len(embed.fields) > 1:
+            await self.send_server_log(embed)
+
+    async def log_emoji_update(
+        self,
+        guild: discord.Guild,
+        before: List[discord.Emoji],
+        after: List[discord.Emoji],
+    ) -> None:
+        before_by_id = {emoji.id: emoji for emoji in before}
+        after_by_id = {emoji.id: emoji for emoji in after}
+
+        for emoji_id, emoji in after_by_id.items():
+            if emoji_id not in before_by_id:
+                embed = self.create_server_log_embed("Emoji Created", discord.Color.green())
+                embed.add_field(name="Emoji", value=f"{emoji} `{emoji.name}` ({emoji.id})", inline=False)
+                embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+                await self.send_server_log(embed)
+
+        for emoji_id, emoji in before_by_id.items():
+            if emoji_id not in after_by_id:
+                embed = self.create_server_log_embed("Emoji Deleted", discord.Color.red())
+                embed.add_field(name="Emoji", value=f"`{emoji.name}` ({emoji.id})", inline=False)
+                embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+                await self.send_server_log(embed)
+
+        for emoji_id, before_emoji in before_by_id.items():
+            after_emoji = after_by_id.get(emoji_id)
+            if after_emoji is None or before_emoji.name == after_emoji.name:
+                continue
+            embed = self.create_server_log_embed("Emoji Name Changed", discord.Color.gold())
+            embed.add_field(name="Emoji", value=f"{after_emoji} ({after_emoji.id})", inline=False)
+            embed.add_field(name="Before", value=before_emoji.name, inline=True)
+            embed.add_field(name="After", value=after_emoji.name, inline=True)
+            await self.send_server_log(embed)
+
+    async def log_invite_create(self, invite: discord.Invite) -> None:
+        if invite.guild is None:
+            return
+        embed = self.create_server_log_embed("Invite Created", discord.Color.green())
+        embed.add_field(name="Invite Info", value=truncate_text(self.describe_invite(invite), 1024), inline=False)
+        embed.add_field(name="Server", value=f"{invite.guild.name} ({invite.guild.id})", inline=False)
+        await self.send_server_log(embed)
+
+    async def log_invite_delete(self, invite: discord.Invite) -> None:
+        if invite.guild is None:
+            return
+        embed = self.create_server_log_embed("Invite Deleted", discord.Color.red())
+        embed.add_field(name="Invite Info", value=truncate_text(self.describe_invite(invite), 1024), inline=False)
+        embed.add_field(name="Server", value=f"{invite.guild.name} ({invite.guild.id})", inline=False)
+        await self.send_server_log(embed)
+
+    async def log_moderator_command(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+        target: discord.abc.User,
+        reason: str,
+    ) -> None:
+        if interaction.guild is None:
+            return
+        embed = self.create_server_log_embed("Moderator Command", discord.Color.blurple())
+        embed.add_field(name="Command", value=action, inline=True)
+        embed.add_field(name="Moderator", value=f"{interaction.user} ({interaction.user.id})", inline=False)
+        embed.add_field(name="Target", value=f"{target} ({target.id})", inline=False)
+        embed.add_field(name="Reason/Details", value=truncate_text(reason, 1024), inline=False)
         await self.send_server_log(embed)
 
     async def get_staff_application_channel(self) -> Optional[discord.TextChannel]:
@@ -1419,6 +1635,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("WARN", user, interaction.user, reason)
         await self.send_modlog(embed)
         await self.add_modlog("WARN", user, interaction.user, reason)
+        await self.log_moderator_command(interaction, "/warn", user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def handle_mute(self, interaction: discord.Interaction, user: discord.Member, duration_text: str, reason: str) -> None:
@@ -1456,6 +1673,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Duration", value=format_duration(duration), inline=False)
         await self.send_modlog(embed)
         await self.add_modlog("MUTE", user, interaction.user, reason, format_duration(duration))
+        await self.log_moderator_command(interaction, "/mute", user, f"{reason} | Duration: {format_duration(duration)}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def handle_kick(self, interaction: discord.Interaction, user: discord.Member, reason: str) -> None:
@@ -1484,6 +1702,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("KICK", user, interaction.user, reason)
         await self.send_modlog(embed)
         await self.add_modlog("KICK", user, interaction.user, reason)
+        await self.log_moderator_command(interaction, "/kick", user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def handle_ban(self, interaction: discord.Interaction, user: discord.Member, reason: str, delete_days: int) -> None:
@@ -1514,6 +1733,7 @@ class DyadiaGuardianBot(commands.Bot):
             embed.add_field(name="Deleted Messages", value=f"{delete_days} day(s)", inline=False)
         await self.send_modlog(embed)
         await self.add_modlog("BAN", user, interaction.user, reason)
+        await self.log_moderator_command(interaction, "/ban", user, f"{reason} | Delete days: {delete_days}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def handle_unban(self, interaction: discord.Interaction, user_id: str, reason: str) -> None:
@@ -1535,6 +1755,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("UNBAN", ban_entry.user, interaction.user, reason)
         await self.send_modlog(embed)
         await self.add_modlog("UNBAN", ban_entry.user, interaction.user, reason)
+        await self.log_moderator_command(interaction, "/unban", ban_entry.user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def handle_clear(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member]) -> None:
@@ -1564,6 +1785,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("CLEAR", target, interaction.user, f"Cleared {len(deleted)} message(s)")
         await self.send_modlog(embed)
         await self.add_modlog("CLEAR", target, interaction.user, f"Cleared {len(deleted)} message(s)")
+        await self.log_moderator_command(interaction, "/clear", target, f"Cleared {len(deleted)} message(s)")
         await interaction.followup.send(f"Deleted {len(deleted)} message(s).", ephemeral=True)
 
     async def handle_modlogs(self, interaction: discord.Interaction, user: discord.User) -> None:
