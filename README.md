@@ -4,7 +4,7 @@ Clean Python Discord bot for moderation, modmail, staff applications, anti-raid 
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `clear`, `modlogs`, `staffapplypanel`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `staffapplypanel`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup

@@ -586,6 +586,8 @@ class DyadiaGuardianBot(commands.Bot):
                     "`/kick` kick a member\n"
                     "`/ban` ban a member\n"
                     "`/unban` unban by user ID\n"
+                    "`/addrole` add a role to a member\n"
+                    "`/removerole` remove a role from a member\n"
                     "`/clear` bulk delete messages\n"
                     "`/modlogs` view in-memory moderation history"
                 ),
@@ -658,6 +660,26 @@ class DyadiaGuardianBot(commands.Bot):
         @app_commands.describe(user_id="The user ID to unban", reason="Reason for the unban")
         async def unban(interaction: discord.Interaction, user_id: str, reason: Optional[str] = None) -> None:
             await self.handle_unban(interaction, user_id, reason or "No reason provided")
+
+        @tree.command(name="addrole", description="Add a role to a member")
+        @app_commands.describe(user="Member to update", role="Role to add", reason="Reason for adding the role")
+        async def addrole(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            role: discord.Role,
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_role_add(interaction, user, role, reason or "No reason provided")
+
+        @tree.command(name="removerole", description="Remove a role from a member")
+        @app_commands.describe(user="Member to update", role="Role to remove", reason="Reason for removing the role")
+        async def removerole(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            role: discord.Role,
+            reason: Optional[str] = None,
+        ) -> None:
+            await self.handle_role_remove(interaction, user, role, reason or "No reason provided")
 
         @tree.command(name="clear", description="Bulk delete recent messages")
         @app_commands.describe(amount="How many recent messages to remove", user="Only remove messages from this user")
@@ -746,6 +768,20 @@ class DyadiaGuardianBot(commands.Bot):
             return "I could not verify my own server role."
         if target.top_role >= me.top_role:
             return "I cannot moderate that member because their role is higher than or equal to mine."
+        return None
+
+    def can_manage_role(self, moderator: discord.Member, role: discord.Role) -> Optional[str]:
+        if role == moderator.guild.default_role:
+            return "You cannot add or remove the default @everyone role."
+        if role.managed:
+            return "That role is managed by an integration and cannot be changed manually."
+        if moderator.guild.owner_id != moderator.id and role >= moderator.top_role:
+            return "You cannot manage a role that is equal to or higher than your top role."
+        me = moderator.guild.me
+        if me is None:
+            return "I could not verify my own server role."
+        if role >= me.top_role:
+            return "I cannot manage that role because it is higher than or equal to my top role."
         return None
 
     def create_modmail_intro_embed(self) -> discord.Embed:
@@ -1757,6 +1793,66 @@ class DyadiaGuardianBot(commands.Bot):
         await self.add_modlog("UNBAN", ban_entry.user, interaction.user, reason)
         await self.log_moderator_command(interaction, "/unban", ban_entry.user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def handle_role_add(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        role: discord.Role,
+        reason: str,
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        moderator = interaction.user
+        if not isinstance(moderator, discord.Member):
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            return
+        blocked_reason = self.can_act_on_target(moderator, user) or self.can_manage_role(moderator, role)
+        if blocked_reason:
+            await interaction.response.send_message(blocked_reason, ephemeral=True)
+            return
+        if role in user.roles:
+            await interaction.response.send_message(f"{user.mention} already has {role.mention}.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await user.add_roles(role, reason=f"{reason} | Added by {interaction.user} ({interaction.user.id})")
+        embed = self.create_modlog_embed("ROLE ADD", user, interaction.user, reason)
+        embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
+        await self.send_modlog(embed)
+        await self.add_modlog("ROLE ADD", user, interaction.user, f"{reason} | Role: {role.name}")
+        await self.log_moderator_command(interaction, "/addrole", user, f"{reason} | Role: {role.name}")
+        await interaction.followup.send(f"Added {role.mention} to {user.mention}.", ephemeral=True)
+
+    async def handle_role_remove(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        role: discord.Role,
+        reason: str,
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_roles"):
+            return
+        moderator = interaction.user
+        if not isinstance(moderator, discord.Member):
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            return
+        blocked_reason = self.can_act_on_target(moderator, user) or self.can_manage_role(moderator, role)
+        if blocked_reason:
+            await interaction.response.send_message(blocked_reason, ephemeral=True)
+            return
+        if role not in user.roles:
+            await interaction.response.send_message(f"{user.mention} does not have {role.mention}.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await user.remove_roles(role, reason=f"{reason} | Removed by {interaction.user} ({interaction.user.id})")
+        embed = self.create_modlog_embed("ROLE REMOVE", user, interaction.user, reason)
+        embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
+        await self.send_modlog(embed)
+        await self.add_modlog("ROLE REMOVE", user, interaction.user, f"{reason} | Role: {role.name}")
+        await self.log_moderator_command(interaction, "/removerole", user, f"{reason} | Role: {role.name}")
+        await interaction.followup.send(f"Removed {role.mention} from {user.mention}.", ephemeral=True)
 
     async def handle_clear(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member]) -> None:
         if not await self.ensure_staff(interaction, "manage_messages"):
