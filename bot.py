@@ -908,18 +908,18 @@ class DyadiaGuardianBot(commands.Bot):
         return make_embed(
             "HOK Dyadia Verification",
             (
-                "Welcome to the server. To gain full access, you must complete verification.\n\n"
-                "**How to Verify**\n"
-                "- Click the button below\n"
-                "- Complete the required check\n"
-                "- Wait for confirmation\n\n"
-                "**Important**\n"
-                "- Do not share personal information\n"
-                "- Avoid repeated failed attempts\n"
-                "- Contact a moderator if you face issues\n\n"
-                "After successful verification, you will receive the Verified role and be able to access all server channels.\n\n"
-                "Use the button below to begin verification.\n\n"
-                "Stay secure. Stay verified."
+                "Welcome! To unlock full access to the server, simply complete a quick verification.\n\n"
+                "**How It Works**\n"
+                "- Tap the HOK Dyadia Verification button below\n"
+                "- Verification will be completed instantly\n\n"
+                "**After Verification**\n"
+                "- You will receive the @Verified role\n"
+                "- Full access to all channels and features will be unlocked\n\n"
+                "**Note**\n"
+                "- Do not spam the button\n"
+                "- Contact staff if you face any issues\n\n"
+                "Tap the button below to get verified.\n\n"
+                "Quick | Simple | Secure"
             ),
             discord.Color.green(),
             footer="Honor Of Kings | Northeast India - Verification",
