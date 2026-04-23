@@ -904,7 +904,9 @@ class DyadiaGuardianBot(commands.Bot):
         )
         return embed
 
-    def create_verification_panel_embed(self) -> discord.Embed:
+    def create_verification_panel_embed(self, guild: discord.Guild) -> discord.Embed:
+        verified_role = self.get_verified_role(guild)
+        verified_role_text = verified_role.mention if verified_role is not None else "@Verified"
         return make_embed(
             "HOK Dyadia Verification",
             (
@@ -913,7 +915,7 @@ class DyadiaGuardianBot(commands.Bot):
                 "- Tap the HOK Dyadia Verification button below\n"
                 "- Verification will be completed instantly\n\n"
                 "**After Verification**\n"
-                "- You will receive the @Verified role\n"
+                f"- You will receive the {verified_role_text} role\n"
                 "- Full access to all channels and features will be unlocked\n\n"
                 "**Note**\n"
                 "- Do not spam the button\n"
@@ -2582,7 +2584,7 @@ class DyadiaGuardianBot(commands.Bot):
                 await interaction.response.send_message("Please choose a text channel for the verification panel.", ephemeral=True)
                 return
 
-        await target_channel.send(embed=self.create_verification_panel_embed(), view=self.verification_view)
+        await target_channel.send(embed=self.create_verification_panel_embed(interaction.guild), view=self.verification_view)
         await interaction.response.send_message(
             f"Verification panel posted in {target_channel.mention}.",
             ephemeral=True,
