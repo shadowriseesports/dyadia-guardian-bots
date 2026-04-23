@@ -1171,6 +1171,51 @@ class DyadiaGuardianBot(commands.Bot):
         embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
         return embed
 
+    async def find_recent_audit_actor(
+        self,
+        guild: discord.Guild,
+        target_id: int,
+        *actions: discord.AuditLogAction,
+        within_seconds: int = 10,
+    ) -> Optional[discord.abc.User]:
+        me = guild.me
+        if me is None or not me.guild_permissions.view_audit_log:
+            return None
+
+        now = utc_now()
+        for action in actions:
+            try:
+                async for entry in guild.audit_logs(limit=5, action=action):
+                    entry_target_id = getattr(entry.target, "id", None)
+                    if entry_target_id != target_id:
+                        continue
+                    if abs((now - entry.created_at).total_seconds()) > within_seconds:
+                        continue
+                    return entry.user
+            except discord.Forbidden:
+                return None
+            except discord.HTTPException:
+                LOGGER.warning("Could not read audit log for %s in guild %s", action, guild.id)
+                return None
+        return None
+
+    async def add_audit_actor_field(
+        self,
+        embed: discord.Embed,
+        guild: discord.Guild,
+        target_id: int,
+        *actions: discord.AuditLogAction,
+        within_seconds: int = 10,
+    ) -> None:
+        actor = await self.find_recent_audit_actor(
+            guild,
+            target_id,
+            *actions,
+            within_seconds=within_seconds,
+        )
+        if actor is not None:
+            embed.add_field(name="Action By", value=actor.mention, inline=False)
+
     def create_verification_log_embed(self, member: discord.Member, role: discord.Role) -> discord.Embed:
         embed = self.create_server_log_embed("Member Verified", discord.Color.green())
         embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
@@ -1277,6 +1322,7 @@ class DyadiaGuardianBot(commands.Bot):
             after_value = discord.utils.format_dt(after_timeout, "F") if after_timeout is not None else "None"
             embed.add_field(name="Before", value=before_value, inline=True)
             embed.add_field(name="After", value=after_value, inline=True)
+            await self.add_audit_actor_field(embed, after.guild, after.id, discord.AuditLogAction.member_update)
             await self.send_server_log(embed)
 
         before_roles = {
@@ -1298,11 +1344,13 @@ class DyadiaGuardianBot(commands.Bot):
             embed = self.create_server_log_embed("Member Role Added", discord.Color.green())
             embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
             embed.add_field(name="Added", value=self.format_role_list(added_roles), inline=False)
+            await self.add_audit_actor_field(embed, after.guild, after.id, discord.AuditLogAction.member_role_update)
             await self.send_server_log(embed)
         if removed_roles:
             embed = self.create_server_log_embed("Member Role Removed", discord.Color.red())
             embed.add_field(name="Member", value=f"{after} ({after.id})", inline=False)
             embed.add_field(name="Removed", value=self.format_role_list(removed_roles), inline=False)
+            await self.add_audit_actor_field(embed, after.guild, after.id, discord.AuditLogAction.member_role_update)
             await self.send_server_log(embed)
 
     async def log_voice_state_update(
@@ -1328,18 +1376,27 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
         embed.add_field(name="Before", value=self.format_voice_channel(before.channel), inline=True)
         embed.add_field(name="After", value=self.format_voice_channel(after.channel), inline=True)
+        await self.add_audit_actor_field(
+            embed,
+            member.guild,
+            member.id,
+            discord.AuditLogAction.member_move,
+            discord.AuditLogAction.member_disconnect,
+        )
         await self.send_server_log(embed)
 
     async def log_member_ban(self, guild: discord.Guild, user: discord.User) -> None:
         embed = self.create_server_log_embed("Member Banned", discord.Color.dark_red())
         embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
         embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+        await self.add_audit_actor_field(embed, guild, user.id, discord.AuditLogAction.ban)
         await self.send_server_log(embed)
 
     async def log_member_unban(self, guild: discord.Guild, user: discord.User) -> None:
         embed = self.create_server_log_embed("Member Unbanned", discord.Color.green())
         embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
         embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+        await self.add_audit_actor_field(embed, guild, user.id, discord.AuditLogAction.unban)
         await self.send_server_log(embed)
 
     async def log_message_delete(self, message: discord.Message) -> None:
