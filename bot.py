@@ -34,6 +34,11 @@ DEFAULT_THUMBNAIL_URL = (
     "1494773502362783936/hokne_community_logo_realistic.png"
     "?ex=69e3d3ce&is=69e2824e&hm=7aa24fffd3c796925bc3947573334f7667874f2899c9a72d70aae32c3ee1215a&"
 )
+DEFAULT_WELCOME_BANNER_URL = (
+    "https://cdn.discordapp.com/attachments/1304134025245364265/"
+    "1490450142619242556/WELCOMEHOKNE_BANNEF_DC.png"
+    "?ex=69eb2b9d&is=69e9da1d&hm=2e3160662ba66f477d6e690dab45e3b786e2a2ec82a33f51c20dc1318cb1b80c&"
+)
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 LEVEL_DATA_PATH = Path("level_data.json")
 INVITE_DATA_PATH = Path("invite_data.json")
@@ -490,6 +495,7 @@ class DyadiaGuardianBot(commands.Bot):
             await self.log_invite_join(member, invite_info)
         await self.handle_anti_raid_join(member)
         await self.sync_level_reward_role(member, announce=False)
+        await self.send_welcome_message(member)
 
     async def on_member_remove(self, member: discord.Member) -> None:
         await self.log_member_leave(member)
@@ -934,6 +940,71 @@ class DyadiaGuardianBot(commands.Bot):
                 return role
 
         return discord.utils.get(guild.roles, name="Verified")
+
+    def find_text_channel_by_name(self, guild: discord.Guild, channel_name: str) -> Optional[discord.TextChannel]:
+        normalized_target = channel_name.strip().lower().lstrip("#")
+        for channel in guild.text_channels:
+            if channel.name.lower() == normalized_target:
+                return channel
+        return None
+
+    def format_channel_reference(self, guild: discord.Guild, channel_name: str) -> str:
+        channel = self.find_text_channel_by_name(guild, channel_name)
+        return channel.mention if channel is not None else f"#{channel_name.lstrip('#')}"
+
+    async def get_welcome_channel(self) -> Optional[discord.TextChannel]:
+        if not self.settings.welcome_channel_id:
+            return None
+        channel = self.get_channel(self.settings.welcome_channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(self.settings.welcome_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch welcome channel %s", self.settings.welcome_channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+        LOGGER.warning("Configured welcome channel is not a text channel: %s", self.settings.welcome_channel_id)
+        return None
+
+    def create_welcome_embed(self, member: discord.Member) -> discord.Embed:
+        verified_role = self.get_verified_role(member.guild)
+        verified_role_text = verified_role.mention if verified_role is not None else "@Verified"
+        verify_channel = self.format_channel_reference(member.guild, "verify")
+        server_info_channel = self.format_channel_reference(member.guild, "server-info")
+        intro_channel = self.format_channel_reference(member.guild, "intro")
+
+        embed = discord.Embed(
+            title=f"Welcome to {member.guild.name}",
+            color=discord.Color.green(),
+            timestamp=utc_now(),
+        )
+        embed.description = (
+            f"Hey {member.mention}! Glad to have you here!\n\n"
+            "**Verification Required**\n"
+            "Before accessing all channels, please complete verification.\n\n"
+            f"Go to {verify_channel} and tap the **HOK Dyadia Verification** button.\n"
+            f"After completing it, you will automatically receive the {verified_role_text} role and unlock the server.\n\n"
+            "Start here:\n"
+            f"1. Verify yourself in {verify_channel}\n"
+            f"2. Read {server_info_channel} to understand the rules\n"
+            f"3. Introduce yourself in {intro_channel}\n"
+            "4. Jump into chats and start making teammates!\n\n"
+            "Let's build the strongest Honor of Kings community in Northeast India."
+        )
+        embed.set_footer(text=BRAND_FOOTER)
+        embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
+        embed.set_image(url=self.settings.welcome_banner_url or DEFAULT_WELCOME_BANNER_URL)
+        return embed
+
+    async def send_welcome_message(self, member: discord.Member) -> None:
+        channel = await self.get_welcome_channel()
+        if channel is None:
+            return
+        await channel.send(
+            embed=self.create_welcome_embed(member),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        )
 
     def create_staff_application_embed(
         self,
@@ -2984,6 +3055,20 @@ class DyadiaGuardianBot(commands.Bot):
             LOGGER.info(
                 "VERIFICATION_LOG_CHANNEL_ID not set. Verification logs will use SERVER_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID."
             )
+
+        if self.settings.welcome_channel_id:
+            try:
+                welcome_channel = self.get_channel(self.settings.welcome_channel_id) or await self.fetch_channel(
+                    self.settings.welcome_channel_id
+                )
+                if isinstance(welcome_channel, discord.TextChannel):
+                    LOGGER.info("Welcome channel found: %s (%s)", welcome_channel.name, welcome_channel.id)
+                else:
+                    LOGGER.warning("WELCOME_CHANNEL_ID is not a text channel: %s", self.settings.welcome_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch welcome channel %s", self.settings.welcome_channel_id)
+        else:
+            LOGGER.info("WELCOME_CHANNEL_ID not set. Automatic welcome messages are disabled.")
 
         try:
             application_channel = self.get_channel(self.settings.staff_application_channel_id) or await self.fetch_channel(

@@ -60,8 +60,10 @@ Enable these intents for the bot:
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
 - Set `INVITE_LOG_CHANNEL_ID` if you want invite create/delete and invite-used join logs in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
+- Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
 - Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
+- Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
 - If `DATABASE_URL` is set, leveling and invite tracking data are stored in PostgreSQL automatically.
 - If `DATABASE_URL` is not set, leveling falls back to `level_data.json` and invite tracking falls back to `invite_data.json` for local use.

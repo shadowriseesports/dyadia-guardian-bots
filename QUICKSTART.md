@@ -16,11 +16,13 @@ Fill these values:
 - `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a separate text channel
 - `INVITE_LOG_CHANNEL_ID` if you want invite logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
+- `WELCOME_CHANNEL_ID` if you want automatic welcome messages in a separate text channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
+- `WELCOME_BANNER_URL` if you want a custom banner image on the welcome embed
 - `DATABASE_URL` if you want PostgreSQL-backed leveling and invite tracking on Railway
 - `LEVEL_XP_INCREMENT` to control how much extra XP each next level requires
 - Optional anti-raid tuning:
@@ -71,6 +73,7 @@ You should see logs confirming:
 - server log channel found or mod-log fallback selected
 - invite log channel found or server/mod-log fallback selected
 - verification log channel found or server/mod-log fallback selected
+- welcome channel found or welcome messages disabled
 - staff application channel found
 - level-up channel found or source-channel fallback selected
 - verified role found or `Verified` role-name fallback selected
