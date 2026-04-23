@@ -1177,26 +1177,31 @@ class DyadiaGuardianBot(commands.Bot):
         target_id: int,
         *actions: discord.AuditLogAction,
         within_seconds: int = 10,
+        attempts: int = 4,
+        retry_delay: float = 1.0,
     ) -> Optional[discord.abc.User]:
         me = guild.me
         if me is None or not me.guild_permissions.view_audit_log:
             return None
 
-        now = utc_now()
-        for action in actions:
-            try:
-                async for entry in guild.audit_logs(limit=5, action=action):
-                    entry_target_id = getattr(entry.target, "id", None)
-                    if entry_target_id != target_id:
-                        continue
-                    if abs((now - entry.created_at).total_seconds()) > within_seconds:
-                        continue
-                    return entry.user
-            except discord.Forbidden:
-                return None
-            except discord.HTTPException:
-                LOGGER.warning("Could not read audit log for %s in guild %s", action, guild.id)
-                return None
+        for attempt in range(attempts):
+            now = utc_now()
+            for action in actions:
+                try:
+                    async for entry in guild.audit_logs(limit=5, action=action):
+                        entry_target_id = getattr(entry.target, "id", None)
+                        if entry_target_id != target_id:
+                            continue
+                        if abs((now - entry.created_at).total_seconds()) > within_seconds:
+                            continue
+                        return entry.user
+                except discord.Forbidden:
+                    return None
+                except discord.HTTPException:
+                    LOGGER.warning("Could not read audit log for %s in guild %s", action, guild.id)
+                    return None
+            if attempt < attempts - 1:
+                await asyncio.sleep(retry_delay)
         return None
 
     async def add_audit_actor_field(
