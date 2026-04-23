@@ -1,11 +1,12 @@
 # Dyadia Guardian Bot
 
-Clean Python Discord bot for moderation, modmail, staff applications, anti-raid protection, server activity logs, and chat-based leveling.
+Clean Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, and chat-based leveling.
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `invites`, `inviteleaderboard`, `staffapplypanel`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
+- Persistent HOK Dyadia verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
 - Modmail inactivity cleanup
 - Simple in-memory moderation log history
@@ -59,6 +60,7 @@ Enable these intents for the bot:
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
 - Set `INVITE_LOG_CHANNEL_ID` if you want invite create/delete and invite-used join logs in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
+- Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
 - If `DATABASE_URL` is set, leveling and invite tracking data are stored in PostgreSQL automatically.
 - If `DATABASE_URL` is not set, leveling falls back to `level_data.json` and invite tracking falls back to `invite_data.json` for local use.

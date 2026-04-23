@@ -241,6 +241,18 @@ class CloseModmailView(discord.ui.View):
         )
 
 
+class VerificationView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="HOK Dyadia Verification",
+                style=discord.ButtonStyle.success,
+                custom_id="verification:start",
+            )
+        )
+
+
 class StaffApplicationPageOneModal(discord.ui.Modal, title="Staff Application 1/2"):
     motivation = discord.ui.TextInput(
         label="1. Motivation",
@@ -414,6 +426,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
+        self.verification_view = VerificationView()
         self.staff_application_view = StaffApplicationView()
 
     async def setup_hook(self) -> None:
@@ -422,6 +435,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
+        self.add_view(self.verification_view)
         self.add_view(self.staff_application_view)
         self.cleanup_inactive_modmail.start()
 
@@ -586,6 +600,10 @@ class DyadiaGuardianBot(commands.Bot):
                     ephemeral=True,
                 )
                 return
+            if custom_id == "verification:start":
+                LOGGER.info("Verification button clicked by %s (%s)", interaction.user, interaction.user.id)
+                await self.handle_verification_button(interaction)
+                return
 
     def register_commands(self) -> None:
         tree = self.tree
@@ -624,6 +642,11 @@ class DyadiaGuardianBot(commands.Bot):
                     "`/staffapplypanel` post the staff application button panel\n"
                     "Members can press the role button to start the 2-page application form"
                 ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Verification",
+                value="`/verificationpanel` post the HOK Dyadia verification panel.",
                 inline=False,
             )
             embed.add_field(
@@ -724,6 +747,14 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_staff_apply_panel(interaction, channel)
+
+        @tree.command(name="verificationpanel", description="Post the HOK Dyadia verification panel")
+        @app_commands.describe(channel="Channel where the verification panel should be posted")
+        async def verificationpanel(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_verification_panel(interaction, channel)
 
         @tree.command(name="rank", description="Show your level and XP progress")
         @app_commands.describe(user="Optional member to inspect")
@@ -872,6 +903,36 @@ class DyadiaGuardianBot(commands.Bot):
             inline=False,
         )
         return embed
+
+    def create_verification_panel_embed(self) -> discord.Embed:
+        return make_embed(
+            "HOK Dyadia Verification",
+            (
+                "Welcome to the server. To gain full access, you must complete verification.\n\n"
+                "📋 **How to Verify**\n"
+                "• Click the button below\n"
+                "• Complete the required check\n"
+                "• Wait for confirmation\n\n"
+                "⚠️ **Important**\n"
+                "• Do not share personal information\n"
+                "• Avoid repeated failed attempts\n"
+                "• Contact a moderator if you face issues\n\n"
+                "📊 **Status:** Awaiting Verification\n"
+                "🌍 **Region:** HOK North East (NE)\n\n"
+                "⬇️ Use the button below to begin verification\n\n"
+                "Stay secure. Stay verified."
+            ),
+            discord.Color.green(),
+            footer="Honor Of Kings | Northeast India - Verification",
+        )
+
+    def get_verified_role(self, guild: discord.Guild) -> Optional[discord.Role]:
+        if self.settings.verified_role_id:
+            role = guild.get_role(self.settings.verified_role_id)
+            if role is not None:
+                return role
+
+        return discord.utils.get(guild.roles, name="Verified")
 
     def create_staff_application_embed(
         self,
@@ -2477,6 +2538,68 @@ class DyadiaGuardianBot(commands.Bot):
             ephemeral=True,
         )
 
+    async def handle_verification_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for the verification panel.", ephemeral=True)
+                return
+
+        await target_channel.send(embed=self.create_verification_panel_embed(), view=self.verification_view)
+        await interaction.response.send_message(
+            f"Verification panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_verification_button(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("This verification button can only be used inside the server.", ephemeral=True)
+            return
+
+        role = self.get_verified_role(interaction.guild)
+        if role is None:
+            await interaction.response.send_message(
+                "The `Verified` role was not found. Ask a moderator to create it or set `VERIFIED_ROLE_ID`.",
+                ephemeral=True,
+            )
+            return
+
+        role_error = self.can_manage_role(interaction.guild.me or interaction.user, role)
+        if role_error is not None:
+            await interaction.response.send_message(role_error, ephemeral=True)
+            return
+
+        if role in interaction.user.roles:
+            await interaction.response.send_message("You are already verified.", ephemeral=True)
+            return
+
+        try:
+            await interaction.user.add_roles(role, reason="HOK Dyadia verification completed")
+        except discord.HTTPException:
+            LOGGER.exception("Failed to assign verified role to %s in guild %s", interaction.user.id, interaction.guild.id)
+            await interaction.response.send_message(
+                "I could not assign the verification role. Please contact a moderator.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Verification complete. You now have {role.mention}.",
+            ephemeral=True,
+        )
+
     async def handle_staff_application_continue(self, interaction: discord.Interaction, custom_id: str) -> None:
         match = re.fullmatch(r"staff_application:continue:(\d):(\d+)", custom_id)
         if match is None:
@@ -2851,6 +2974,17 @@ class DyadiaGuardianBot(commands.Bot):
                 LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
         else:
             LOGGER.info("LEVEL_UP_CHANNEL_ID not set. Level-up messages will use the source chat channel.")
+
+        if self.settings.verified_role_id:
+            for guild in self.guilds:
+                role = guild.get_role(self.settings.verified_role_id)
+                if role is not None:
+                    LOGGER.info("Verified role found in %s: %s (%s)", guild.name, role.name, role.id)
+                    break
+            else:
+                LOGGER.warning("VERIFIED_ROLE_ID was set but no matching role was found in the connected guilds.")
+        else:
+            LOGGER.info("VERIFIED_ROLE_ID not set. Verification falls back to the role name `Verified`.")
 
         LOGGER.info(
             "Anti-raid config | enabled=%s threshold=%s window=%ss lockdown=%sm account_age=%sm timeout=%sm",

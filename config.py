@@ -19,6 +19,7 @@ class Settings:
     server_log_channel_id: int = 0
     invite_log_channel_id: int = 0
     level_up_channel_id: int = 0
+    verified_role_id: int = 0
     database_url: str = ""
     level_xp_increment: int = 10
     anti_raid_enabled: bool = True
@@ -96,6 +97,7 @@ def load_settings() -> Settings:
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
         level_up_channel_id=_get_optional_int("LEVEL_UP_CHANNEL_ID"),
+        verified_role_id=_get_optional_int("VERIFIED_ROLE_ID"),
         database_url=os.getenv("DATABASE_URL", "").strip(),
         level_xp_increment=_get_int("LEVEL_XP_INCREMENT", 10, minimum=1),
         anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),

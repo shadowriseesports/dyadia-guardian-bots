@@ -19,6 +19,7 @@ Fill these values:
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
+- `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
 - `DATABASE_URL` if you want PostgreSQL-backed leveling and invite tracking on Railway
 - `LEVEL_XP_INCREMENT` to control how much extra XP each next level requires
 - Optional anti-raid tuning:
@@ -70,6 +71,7 @@ You should see logs confirming:
 - invite log channel found or server/mod-log fallback selected
 - staff application channel found
 - level-up channel found or source-channel fallback selected
+- verified role found or `Verified` role-name fallback selected
 - anti-raid config values loaded
 - leveling data file loaded or created
 - leveling storage backend selected
@@ -98,6 +100,13 @@ You should see logs confirming:
 5. Use `/leaderboard` to confirm the server ranking updates
 6. Use `/invites` and `/inviteleaderboard` after a tracked invite join
 
-## 10. Railway note
+## 10. Test verification
+
+1. Create a `Verified` role in Discord, or set `VERIFIED_ROLE_ID` to the role you want to assign
+2. Use `/verificationpanel` to post the HOK Dyadia verification panel
+3. Click the `HOK Dyadia Verification` button with a test member
+4. Confirm the member receives the verified role
+
+## 11. Railway note
 
 If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling and invite tracking data will be stored in PostgreSQL automatically. Without `DATABASE_URL`, the bot falls back to `level_data.json` and `invite_data.json` for local use.
