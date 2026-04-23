@@ -1065,6 +1065,20 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured invite log channel is not a text channel: %s", channel_id)
         return None
 
+    async def get_verification_log_channel(self) -> Optional[discord.TextChannel]:
+        channel_id = self.settings.verification_log_channel_id or self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch verification log channel %s", channel_id)
+                return None
+        if isinstance(channel, discord.TextChannel):
+            return channel
+        LOGGER.warning("Configured verification log channel is not a text channel: %s", channel_id)
+        return None
+
     async def send_server_log(self, embed: discord.Embed) -> None:
         channel = await self.get_server_log_channel()
         if channel is not None:
@@ -1075,10 +1089,22 @@ class DyadiaGuardianBot(commands.Bot):
         if channel is not None:
             await channel.send(embed=embed)
 
+    async def send_verification_log(self, embed: discord.Embed) -> None:
+        channel = await self.get_verification_log_channel()
+        if channel is not None:
+            await channel.send(embed=embed)
+
     def create_server_log_embed(self, title: str, color: discord.Color) -> discord.Embed:
         embed = discord.Embed(title=title, color=color, timestamp=utc_now())
         embed.set_footer(text=BRAND_FOOTER)
         embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
+        return embed
+
+    def create_verification_log_embed(self, member: discord.Member, role: discord.Role) -> discord.Embed:
+        embed = self.create_server_log_embed("Member Verified", discord.Color.green())
+        embed.add_field(name="Member", value=f"{member} ({member.id})", inline=False)
+        embed.add_field(name="Role Granted", value=role.mention, inline=False)
+        embed.add_field(name="Verified At", value=discord.utils.format_dt(utc_now(), "F"), inline=False)
         return embed
 
     def format_role_list(self, roles: List[discord.Role]) -> str:
@@ -2599,6 +2625,7 @@ class DyadiaGuardianBot(commands.Bot):
             )
             return
 
+        await self.send_verification_log(self.create_verification_log_embed(interaction.user, role))
         await interaction.response.send_message(
             f"Verification complete. You have been given {role.mention} and can now access all server channels.",
             ephemeral=True,
@@ -2936,6 +2963,27 @@ class DyadiaGuardianBot(commands.Bot):
                 LOGGER.exception("Could not fetch invite log channel %s", invite_log_channel_id)
         else:
             LOGGER.info("INVITE_LOG_CHANNEL_ID not set. Invite logs will use SERVER_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID.")
+
+        verification_log_channel_id = (
+            self.settings.verification_log_channel_id
+            or self.settings.server_log_channel_id
+            or self.settings.mod_log_channel_id
+        )
+        if self.settings.verification_log_channel_id:
+            try:
+                verification_log_channel = self.get_channel(verification_log_channel_id) or await self.fetch_channel(
+                    verification_log_channel_id
+                )
+                if isinstance(verification_log_channel, discord.TextChannel):
+                    LOGGER.info("Verification log channel found: %s (%s)", verification_log_channel.name, verification_log_channel.id)
+                else:
+                    LOGGER.warning("VERIFICATION_LOG_CHANNEL_ID is not a text channel: %s", verification_log_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch verification log channel %s", verification_log_channel_id)
+        else:
+            LOGGER.info(
+                "VERIFICATION_LOG_CHANNEL_ID not set. Verification logs will use SERVER_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID."
+            )
 
         try:
             application_channel = self.get_channel(self.settings.staff_application_channel_id) or await self.fetch_channel(

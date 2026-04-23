@@ -15,6 +15,7 @@ Fill these values:
 - `MOD_LOG_CHANNEL_ID`
 - `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a separate text channel
 - `INVITE_LOG_CHANNEL_ID` if you want invite logs in a separate text channel
+- `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
@@ -69,6 +70,7 @@ You should see logs confirming:
 - mod log channel found
 - server log channel found or mod-log fallback selected
 - invite log channel found or server/mod-log fallback selected
+- verification log channel found or server/mod-log fallback selected
 - staff application channel found
 - level-up channel found or source-channel fallback selected
 - verified role found or `Verified` role-name fallback selected
@@ -106,6 +108,7 @@ You should see logs confirming:
 2. Use `/verificationpanel` to post the HOK Dyadia verification panel
 3. Click the `HOK Dyadia Verification` button with a test member
 4. Confirm the member receives the verified role
+5. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
 
 ## 11. Railway note
 

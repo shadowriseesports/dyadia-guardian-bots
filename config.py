@@ -19,6 +19,7 @@ class Settings:
     server_log_channel_id: int = 0
     invite_log_channel_id: int = 0
     level_up_channel_id: int = 0
+    verification_log_channel_id: int = 0
     verified_role_id: int = 0
     database_url: str = ""
     level_xp_increment: int = 10
@@ -93,6 +94,7 @@ def load_settings() -> Settings:
         mod_log_channel_id=_require_int("MOD_LOG_CHANNEL_ID"),
         server_log_channel_id=_get_optional_int("SERVER_LOG_CHANNEL_ID"),
         invite_log_channel_id=_get_optional_int("INVITE_LOG_CHANNEL_ID"),
+        verification_log_channel_id=_get_optional_int("VERIFICATION_LOG_CHANNEL_ID"),
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
