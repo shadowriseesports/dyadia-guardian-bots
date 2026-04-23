@@ -909,17 +909,18 @@ class DyadiaGuardianBot(commands.Bot):
             "HOK Dyadia Verification",
             (
                 "Welcome to the server. To gain full access, you must complete verification.\n\n"
-                "📋 **How to Verify**\n"
-                "• Click the button below\n"
-                "• Complete the required check\n"
-                "• Wait for confirmation\n\n"
-                "⚠️ **Important**\n"
-                "• Do not share personal information\n"
-                "• Avoid repeated failed attempts\n"
-                "• Contact a moderator if you face issues\n\n"
-                "📊 **Status:** Awaiting Verification\n"
-                "🌍 **Region:** HOK North East (NE)\n\n"
-                "⬇️ Use the button below to begin verification\n\n"
+                "**How to Verify**\n"
+                "- Click the button below\n"
+                "- Complete the required check\n"
+                "- Wait for confirmation\n\n"
+                "**Important**\n"
+                "- Do not share personal information\n"
+                "- Avoid repeated failed attempts\n"
+                "- Contact a moderator if you face issues\n\n"
+                "**Status:** Awaiting Verification\n"
+                "**Region:** HOK North East (NE)\n\n"
+                "After successful verification, you will receive the Verified role and be able to access all server channels.\n\n"
+                "Use the button below to begin verification.\n\n"
                 "Stay secure. Stay verified."
             ),
             discord.Color.green(),
@@ -2582,7 +2583,10 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         if role in interaction.user.roles:
-            await interaction.response.send_message("You are already verified.", ephemeral=True)
+            await interaction.response.send_message(
+                "You have already verified and already have the Verified role.",
+                ephemeral=True,
+            )
             return
 
         try:
@@ -2596,7 +2600,7 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         await interaction.response.send_message(
-            f"Verification complete. You now have {role.mention}.",
+            f"Verification complete. You have been given {role.mention} and can now access all server channels.",
             ephemeral=True,
         )
 
