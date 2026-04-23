@@ -917,8 +917,6 @@ class DyadiaGuardianBot(commands.Bot):
                 "- Do not share personal information\n"
                 "- Avoid repeated failed attempts\n"
                 "- Contact a moderator if you face issues\n\n"
-                "**Status:** Awaiting Verification\n"
-                "**Region:** HOK North East (NE)\n\n"
                 "After successful verification, you will receive the Verified role and be able to access all server channels.\n\n"
                 "Use the button below to begin verification.\n\n"
                 "Stay secure. Stay verified."
