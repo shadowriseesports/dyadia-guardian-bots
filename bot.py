@@ -42,6 +42,7 @@ DEFAULT_WELCOME_BANNER_URL = (
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 LEVEL_DATA_PATH = Path("level_data.json")
 INVITE_DATA_PATH = Path("invite_data.json")
+AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 LEVEL_XP_GAIN_MIN = 15
 LEVEL_XP_GAIN_MAX = 25
 LEADERBOARD_LIMIT = 10
@@ -118,6 +119,11 @@ class InviteSnapshot:
     uses: int
     inviter_id: Optional[int] = None
     channel_id: Optional[int] = None
+
+
+@dataclass
+class AutoReactionConfig:
+    emoji: str
 
 
 def utc_now() -> datetime:
@@ -577,6 +583,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
         self.invite_counts: Dict[int, Dict[int, int]] = {}
         self.invite_cache: Dict[int, Dict[str, InviteSnapshot]] = {}
+        self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
@@ -586,6 +593,7 @@ class DyadiaGuardianBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.load_level_data()
         await self.load_invite_data()
+        await self.load_autoreact_data()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -621,12 +629,17 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.exception("Unhandled Discord event error in %s", event_method)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
-            return
-
         if isinstance(message.channel, discord.DMChannel):
+            if message.author.bot:
+                return
             LOGGER.info("DM received from %s (%s): %s", message.author, message.author.id, message.content or "[no text]")
             await self.handle_user_dm(message)
+            return
+
+        if message.guild is not None:
+            await self.handle_autoreactions(message)
+
+        if message.author.bot:
             return
 
         if isinstance(message.channel, discord.Thread):
@@ -829,6 +842,14 @@ class DyadiaGuardianBot(commands.Bot):
                 value="`/embed` open a modal to build and send an embed message.",
                 inline=False,
             )
+            embed.add_field(
+                name="Auto-Reactions",
+                value=(
+                    "`/autoreact activate` react to every message in a channel\n"
+                    "`/autoreact deactivate` turn off auto-reactions in a channel"
+                ),
+                inline=False,
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
@@ -950,6 +971,28 @@ class DyadiaGuardianBot(commands.Bot):
         ) -> None:
             await self.handle_embed_builder(interaction, channel)
 
+        autoreact = app_commands.Group(name="autoreact", description="Manage automatic message reactions")
+
+        @autoreact.command(name="activate", description="React to every message in a channel")
+        @app_commands.describe(
+            emoji="Emoji to react with, like :fire: or 👍",
+            channel="Channel where the bot should auto-react",
+        )
+        async def autoreact_activate(
+            interaction: discord.Interaction,
+            emoji: str,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_autoreact_activate(interaction, emoji, channel)
+
+        @autoreact.command(name="deactivate", description="Turn off auto-reactions in a channel")
+        @app_commands.describe(channel="Channel where the bot should stop auto-reacting")
+        async def autoreact_deactivate(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_autoreact_deactivate(interaction, channel)
+
         anti_raid = app_commands.Group(name="antiraid", description="Manage anti-raid protection")
 
         @anti_raid.command(name="status", description="Show anti-raid status for this server")
@@ -973,6 +1016,7 @@ class DyadiaGuardianBot(commands.Bot):
             await self.handle_antiraid_deactivate(interaction)
 
         tree.add_command(anti_raid)
+        tree.add_command(autoreact)
 
     def has_staff_access(self, member: discord.Member, permission: str) -> bool:
         if member.guild_permissions.administrator:
@@ -2049,6 +2093,81 @@ class DyadiaGuardianBot(commands.Bot):
         channel_text = f"<#{used_invite.channel_id}>" if used_invite.channel_id is not None else "Unknown channel"
         return f"Code `{used_invite.code}` from {inviter_text} in {channel_text}\nInviter total: **{total_joins}**"
 
+    async def load_autoreact_data(self) -> None:
+        self.autoreact_configs = await asyncio.to_thread(self._load_autoreact_data_sync)
+
+    def _load_autoreact_data_sync(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
+        loaded_data: Dict[int, Dict[int, AutoReactionConfig]] = {}
+        if not AUTOREACT_DATA_PATH.exists():
+            LOGGER.info("Auto-reaction data file %s not found. A new one will be created on first activation.", AUTOREACT_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(AUTOREACT_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load auto-reaction data from %s", AUTOREACT_DATA_PATH)
+            return loaded_data
+
+        for guild_id, rules in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(rules, dict):
+                continue
+
+            parsed_configs: Dict[int, AutoReactionConfig] = {}
+            for channel_id, emoji_value in rules.items():
+                try:
+                    parsed_channel_id = int(channel_id)
+                except (TypeError, ValueError):
+                    continue
+                emoji = self.normalize_autoreact_emoji(str(emoji_value))
+                if emoji is None or parsed_channel_id <= 0:
+                    continue
+                parsed_configs[parsed_channel_id] = AutoReactionConfig(emoji=emoji)
+
+            loaded_data[parsed_guild_id] = parsed_configs
+
+        LOGGER.info("Loaded auto-reaction data for %s guild(s) from %s", len(loaded_data), AUTOREACT_DATA_PATH)
+        return loaded_data
+
+    def save_autoreact_data(self) -> None:
+        serialized = {
+            str(guild_id): {
+                str(channel_id): config.emoji
+                for channel_id, config in channel_configs.items()
+            }
+            for guild_id, channel_configs in self.autoreact_configs.items()
+        }
+        try:
+            AUTOREACT_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save auto-reaction data to %s", AUTOREACT_DATA_PATH)
+
+    async def persist_autoreact_data(self) -> None:
+        await asyncio.to_thread(self.save_autoreact_data)
+
+    async def handle_autoreactions(self, message: discord.Message) -> None:
+        if message.guild is None:
+            return
+
+        channel_configs = self.autoreact_configs.get(message.guild.id, {})
+        config = channel_configs.get(message.channel.id)
+        if config is None:
+            return
+
+        try:
+            await message.add_reaction(config.emoji)
+        except discord.HTTPException:
+            LOGGER.warning(
+                "Failed to add auto-reaction %s in guild %s channel %s message %s",
+                config.emoji,
+                message.guild.id,
+                message.channel.id,
+                message.id,
+            )
+
     async def load_level_data(self) -> None:
         self.level_data = await asyncio.to_thread(self._load_level_data_sync)
 
@@ -2362,6 +2481,36 @@ class DyadiaGuardianBot(commands.Bot):
             await user.send(embed=embed)
         except discord.HTTPException:
             LOGGER.warning("Could not DM %s (%s)", user, user.id)
+
+    def normalize_autoreact_emoji(self, value: str) -> Optional[str]:
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+
+        partial = discord.PartialEmoji.from_str(cleaned)
+        if partial.id is not None:
+            return str(partial)
+        if partial.name:
+            return partial.name
+        return cleaned
+
+    def get_autoreact_configs(self, guild_id: int) -> Dict[int, AutoReactionConfig]:
+        return self.autoreact_configs.setdefault(guild_id, {})
+
+    def create_autoreact_embed(self, guild: discord.Guild) -> discord.Embed:
+        channel_configs = self.get_autoreact_configs(guild.id)
+        if not channel_configs:
+            return make_embed(
+                "Auto-Reactions",
+                "No auto-reaction channels are configured for this server yet.",
+                discord.Color.blurple(),
+            )
+
+        lines = []
+        for channel_id, config in sorted(channel_configs.items()):
+            lines.append(f"Channel: <#{channel_id}> | Emoji: {config.emoji}")
+
+        return make_embed("Auto-Reactions", "\n".join(lines), discord.Color.blurple())
 
     async def handle_warn(self, interaction: discord.Interaction, user: discord.Member, reason: str) -> None:
         if not await self.ensure_staff(interaction, "moderate_members"):
@@ -2721,6 +2870,73 @@ class DyadiaGuardianBot(commands.Bot):
         await target_channel.send(embed=self.create_leveling_panel_embed(interaction.guild))
         await interaction.response.send_message(
             f"Leveling panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_autoreact_activate(
+        self,
+        interaction: discord.Interaction,
+        emoji: str,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        normalized_emoji = self.normalize_autoreact_emoji(emoji)
+        if normalized_emoji is None:
+            await interaction.response.send_message("Please provide a valid emoji.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for auto-reaction.", ephemeral=True)
+                return
+
+        channel_configs = self.get_autoreact_configs(interaction.guild.id)
+        channel_configs[target_channel.id] = AutoReactionConfig(emoji=normalized_emoji)
+        await self.persist_autoreact_data()
+        await interaction.response.send_message(
+            f"Auto-reaction activated in {target_channel.mention}. I will react to every message there with {normalized_emoji}.",
+            ephemeral=True,
+        )
+
+    async def handle_autoreact_deactivate(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel to deactivate.", ephemeral=True)
+                return
+
+        channel_configs = self.get_autoreact_configs(interaction.guild.id)
+        if target_channel.id not in channel_configs:
+            await interaction.response.send_message(
+                f"Auto-reaction is not active in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        channel_configs.pop(target_channel.id, None)
+        await self.persist_autoreact_data()
+        await interaction.response.send_message(
+            f"Auto-reaction deactivated in {target_channel.mention}.",
             ephemeral=True,
         )
 
