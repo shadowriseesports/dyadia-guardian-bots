@@ -123,7 +123,7 @@ class InviteSnapshot:
 
 @dataclass
 class AutoReactionConfig:
-    emoji: str
+    emojis: List[str] = field(default_factory=list)
 
 
 def utc_now() -> datetime:
@@ -975,7 +975,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         @autoreact.command(name="activate", description="React to every message in a channel")
         @app_commands.describe(
-            emoji="Emoji to react with, like :fire: or 👍",
+            emoji="One or more emojis, separated by commas, like 🔥,❤️,👍",
             channel="Channel where the bot should auto-react",
         )
         async def autoreact_activate(
@@ -2122,10 +2122,17 @@ class DyadiaGuardianBot(commands.Bot):
                     parsed_channel_id = int(channel_id)
                 except (TypeError, ValueError):
                     continue
-                emoji = self.normalize_autoreact_emoji(str(emoji_value))
-                if emoji is None or parsed_channel_id <= 0:
+
+                parsed_emojis: List[str] = []
+                raw_emojis = emoji_value if isinstance(emoji_value, list) else [emoji_value]
+                for raw_emoji in raw_emojis:
+                    emoji = self.normalize_autoreact_emoji(str(raw_emoji))
+                    if emoji is not None and emoji not in parsed_emojis:
+                        parsed_emojis.append(emoji)
+
+                if not parsed_emojis or parsed_channel_id <= 0:
                     continue
-                parsed_configs[parsed_channel_id] = AutoReactionConfig(emoji=emoji)
+                parsed_configs[parsed_channel_id] = AutoReactionConfig(emojis=parsed_emojis)
 
             loaded_data[parsed_guild_id] = parsed_configs
 
@@ -2135,7 +2142,7 @@ class DyadiaGuardianBot(commands.Bot):
     def save_autoreact_data(self) -> None:
         serialized = {
             str(guild_id): {
-                str(channel_id): config.emoji
+                str(channel_id): config.emojis
                 for channel_id, config in channel_configs.items()
             }
             for guild_id, channel_configs in self.autoreact_configs.items()
@@ -2157,16 +2164,17 @@ class DyadiaGuardianBot(commands.Bot):
         if config is None:
             return
 
-        try:
-            await message.add_reaction(config.emoji)
-        except discord.HTTPException:
-            LOGGER.warning(
-                "Failed to add auto-reaction %s in guild %s channel %s message %s",
-                config.emoji,
-                message.guild.id,
-                message.channel.id,
-                message.id,
-            )
+        for emoji in config.emojis:
+            try:
+                await message.add_reaction(emoji)
+            except discord.HTTPException:
+                LOGGER.warning(
+                    "Failed to add auto-reaction %s in guild %s channel %s message %s",
+                    emoji,
+                    message.guild.id,
+                    message.channel.id,
+                    message.id,
+                )
 
     async def load_level_data(self) -> None:
         self.level_data = await asyncio.to_thread(self._load_level_data_sync)
@@ -2494,6 +2502,14 @@ class DyadiaGuardianBot(commands.Bot):
             return partial.name
         return cleaned
 
+    def parse_autoreact_emojis(self, value: str) -> List[str]:
+        parsed_emojis: List[str] = []
+        for part in value.split(","):
+            emoji = self.normalize_autoreact_emoji(part)
+            if emoji is not None and emoji not in parsed_emojis:
+                parsed_emojis.append(emoji)
+        return parsed_emojis
+
     def get_autoreact_configs(self, guild_id: int) -> Dict[int, AutoReactionConfig]:
         return self.autoreact_configs.setdefault(guild_id, {})
 
@@ -2508,7 +2524,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         lines = []
         for channel_id, config in sorted(channel_configs.items()):
-            lines.append(f"Channel: <#{channel_id}> | Emoji: {config.emoji}")
+            lines.append(f"Channel: <#{channel_id}> | Emojis: {' '.join(config.emojis)}")
 
         return make_embed("Auto-Reactions", "\n".join(lines), discord.Color.blurple())
 
@@ -2885,9 +2901,12 @@ class DyadiaGuardianBot(commands.Bot):
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
 
-        normalized_emoji = self.normalize_autoreact_emoji(emoji)
-        if normalized_emoji is None:
-            await interaction.response.send_message("Please provide a valid emoji.", ephemeral=True)
+        normalized_emojis = self.parse_autoreact_emojis(emoji)
+        if not normalized_emojis:
+            await interaction.response.send_message(
+                "Please provide one or more valid emojis, separated by commas.",
+                ephemeral=True,
+            )
             return
 
         target_channel = channel
@@ -2899,10 +2918,19 @@ class DyadiaGuardianBot(commands.Bot):
                 return
 
         channel_configs = self.get_autoreact_configs(interaction.guild.id)
-        channel_configs[target_channel.id] = AutoReactionConfig(emoji=normalized_emoji)
+        config = channel_configs.setdefault(target_channel.id, AutoReactionConfig())
+        added_emojis = [item for item in normalized_emojis if item not in config.emojis]
+        if not added_emojis:
+            await interaction.response.send_message(
+                f"Those emojis are already active for auto-reactions in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        config.emojis.extend(added_emojis)
         await self.persist_autoreact_data()
         await interaction.response.send_message(
-            f"Auto-reaction activated in {target_channel.mention}. I will react to every message there with {normalized_emoji}.",
+            f"Auto-reaction updated in {target_channel.mention}. Added {' '.join(added_emojis)}. Active emojis: {' '.join(config.emojis)}.",
             ephemeral=True,
         )
 
