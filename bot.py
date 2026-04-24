@@ -240,6 +240,9 @@ def is_valid_image_url(value: str) -> bool:
     return bool(re.fullmatch(r"https?://\S+", value.strip(), re.IGNORECASE))
 
 
+TOKEN_REFERENCE_RE = re.compile(r"\{([#@&])([^{}]+)\}")
+
+
 class OpenModmailView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -424,7 +427,7 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
     message_content = discord.ui.TextInput(
         label="Message Content",
         style=discord.TextStyle.paragraph,
-        placeholder="Optional plain text message above the embed.",
+        placeholder="Use {#channel}, {&role}, {@member} if needed.",
         required=False,
         max_length=2000,
     )
@@ -437,7 +440,7 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
     embed_description = discord.ui.TextInput(
         label="Embed Description",
         style=discord.TextStyle.paragraph,
-        placeholder="Main embed content",
+        placeholder="Main embed content. Mentions: {#channel} {&role} {@member}",
         required=False,
         max_length=4000,
     )
@@ -488,6 +491,17 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
             )
             return
 
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This embed builder can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        content = self.bot.resolve_embed_references(interaction.guild, content)
+        title = self.bot.resolve_embed_references(interaction.guild, title)
+        description = self.bot.resolve_embed_references(interaction.guild, description)
+
         embed: Optional[discord.Embed] = None
         if title is not None or description is not None or image_url is not None:
             embed = discord.Embed(
@@ -504,6 +518,11 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
             send_kwargs = {"content": content}
             if embed is not None:
                 send_kwargs["embed"] = embed
+            send_kwargs["allowed_mentions"] = discord.AllowedMentions(
+                users=False,
+                roles=False,
+                everyone=False,
+            )
             await self.target_channel.send(**send_kwargs)
         except discord.Forbidden:
             await interaction.response.send_message(
@@ -1094,6 +1113,44 @@ class DyadiaGuardianBot(commands.Bot):
     def format_channel_reference(self, guild: discord.Guild, channel_name: str) -> str:
         channel = self.find_text_channel_by_name(guild, channel_name)
         return channel.mention if channel is not None else f"#{channel_name.lstrip('#')}"
+
+    def find_role_by_name(self, guild: discord.Guild, role_name: str) -> Optional[discord.Role]:
+        normalized_target = role_name.strip().lower().lstrip("@&")
+        for role in guild.roles:
+            if role.name.lower() == normalized_target:
+                return role
+        return None
+
+    def find_member_reference(self, guild: discord.Guild, member_text: str) -> Optional[discord.Member]:
+        cleaned = member_text.strip().lstrip("@")
+        if cleaned.isdigit():
+            return guild.get_member(int(cleaned))
+
+        normalized_target = cleaned.lower()
+        for member in guild.members:
+            if member.display_name.lower() == normalized_target or member.name.lower() == normalized_target:
+                return member
+        return None
+
+    def resolve_embed_references(self, guild: discord.Guild, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+
+        def replace_token(match: re.Match[str]) -> str:
+            token_type = match.group(1)
+            token_value = match.group(2).strip()
+
+            if token_type == "#":
+                channel = self.find_text_channel_by_name(guild, token_value)
+                return channel.mention if channel is not None else match.group(0)
+            if token_type == "&":
+                role = self.find_role_by_name(guild, token_value)
+                return role.mention if role is not None else match.group(0)
+
+            member = self.find_member_reference(guild, token_value)
+            return member.mention if member is not None else match.group(0)
+
+        return TOKEN_REFERENCE_RE.sub(replace_token, value)
 
     async def get_welcome_channel(self) -> Optional[discord.TextChannel]:
         if not self.settings.welcome_channel_id:
