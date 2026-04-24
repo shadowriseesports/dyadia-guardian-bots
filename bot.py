@@ -222,6 +222,24 @@ def truncate_text(value: str, limit: int = 1000) -> str:
     return f"{value[: limit - 3]}..."
 
 
+def normalize_optional_text(value: str) -> Optional[str]:
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def parse_embed_color(value: str) -> Optional[discord.Color]:
+    cleaned = value.strip().lower().removeprefix("#")
+    if not cleaned:
+        return discord.Color.blurple()
+    if not re.fullmatch(r"[0-9a-f]{6}", cleaned):
+        return None
+    return discord.Color(int(cleaned, 16))
+
+
+def is_valid_image_url(value: str) -> bool:
+    return bool(re.fullmatch(r"https?://\S+", value.strip(), re.IGNORECASE))
+
+
 class OpenModmailView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -400,6 +418,118 @@ class StaffApplicationContinueView(discord.ui.View):
                 custom_id=f"staff_application:continue:{next_page}:{user_id}",
             )
         )
+
+
+class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
+    message_content = discord.ui.TextInput(
+        label="Message Content",
+        style=discord.TextStyle.paragraph,
+        placeholder="Optional plain text message above the embed.",
+        required=False,
+        max_length=2000,
+    )
+    embed_title = discord.ui.TextInput(
+        label="Embed Title",
+        placeholder="Optional embed title",
+        required=False,
+        max_length=256,
+    )
+    embed_description = discord.ui.TextInput(
+        label="Embed Description",
+        style=discord.TextStyle.paragraph,
+        placeholder="Main embed content",
+        required=False,
+        max_length=4000,
+    )
+    embed_color = discord.ui.TextInput(
+        label="Embed Color",
+        placeholder="Hex color like #5865F2",
+        required=False,
+        default="#5865F2",
+        max_length=7,
+    )
+    image_url = discord.ui.TextInput(
+        label="Image URL",
+        placeholder="Optional https:// image URL",
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, bot: "DyadiaGuardianBot", target_channel: discord.TextChannel) -> None:
+        super().__init__()
+        self.bot = bot
+        self.target_channel = target_channel
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        content = normalize_optional_text(self.message_content.value)
+        title = normalize_optional_text(self.embed_title.value)
+        description = normalize_optional_text(self.embed_description.value)
+        image_url = normalize_optional_text(self.image_url.value)
+        color = parse_embed_color(self.embed_color.value)
+
+        if color is None:
+            await interaction.response.send_message(
+                "Please use a valid hex color like `#5865F2`.",
+                ephemeral=True,
+            )
+            return
+
+        if image_url is not None and not is_valid_image_url(image_url):
+            await interaction.response.send_message(
+                "Please use a valid `http://` or `https://` image URL.",
+                ephemeral=True,
+            )
+            return
+
+        if content is None and title is None and description is None and image_url is None:
+            await interaction.response.send_message(
+                "Add some message content or embed content before sending.",
+                ephemeral=True,
+            )
+            return
+
+        embed: Optional[discord.Embed] = None
+        if title is not None or description is not None or image_url is not None:
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                color=color,
+                timestamp=utc_now(),
+            )
+            embed.set_footer(text=BRAND_FOOTER)
+            if image_url is not None:
+                embed.set_image(url=image_url)
+
+        try:
+            send_kwargs = {"content": content}
+            if embed is not None:
+                send_kwargs["embed"] = embed
+            await self.target_channel.send(**send_kwargs)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"I do not have permission to send messages in {self.target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send embed builder message to channel %s", self.target_channel.id)
+            await interaction.response.send_message(
+                "I could not send that embed right now. Please try again.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Embed sent in {self.target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        LOGGER.exception("Embed builder modal failed for %s", interaction.user, exc_info=error)
+        if interaction.response.is_done():
+            await interaction.followup.send("The embed builder failed. Please try again.", ephemeral=True)
+        else:
+            await interaction.response.send_message("The embed builder failed. Please try again.", ephemeral=True)
 
 
 class DyadiaGuardianBot(commands.Bot):
@@ -675,6 +805,11 @@ class DyadiaGuardianBot(commands.Bot):
                 ),
                 inline=False,
             )
+            embed.add_field(
+                name="Embeds",
+                value="`/embed` open a modal to build and send an embed message.",
+                inline=False,
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
@@ -787,6 +922,14 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_level_panel(interaction, channel)
+
+        @tree.command(name="embed", description="Open an embed builder and send it to a channel")
+        @app_commands.describe(channel="Channel where the embed should be posted")
+        async def embed(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_embed_builder(interaction, channel)
 
         anti_raid = app_commands.Group(name="antiraid", description="Manage anti-raid protection")
 
@@ -2523,6 +2666,41 @@ class DyadiaGuardianBot(commands.Bot):
             f"Leveling panel posted in {target_channel.mention}.",
             ephemeral=True,
         )
+
+    async def handle_embed_builder(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for the embed.", ephemeral=True)
+                return
+
+        bot_member = interaction.guild.me
+        if bot_member is None and self.user is not None:
+            bot_member = interaction.guild.get_member(self.user.id)
+        if bot_member is None:
+            await interaction.response.send_message("I could not verify my channel permissions right now.", ephemeral=True)
+            return
+
+        if not target_channel.permissions_for(bot_member).send_messages:
+            await interaction.response.send_message(
+                f"I do not have permission to send messages in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(EmbedBuilderModal(self, target_channel))
 
     def get_anti_raid_state(self, guild_id: int) -> AntiRaidState:
         state = self.anti_raid_states.get(guild_id)
