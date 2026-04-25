@@ -21,9 +21,13 @@ class Settings:
     level_up_channel_id: int = 0
     verification_log_channel_id: int = 0
     welcome_channel_id: int = 0
+    instagram_notification_channel_id: int = 0
     verified_role_id: int = 0
     database_url: str = ""
     welcome_banner_url: str = ""
+    instagram_feed_url: str = ""
+    instagram_profile_name: str = "Instagram"
+    instagram_poll_minutes: int = 10
     level_xp_increment: int = 10
     anti_raid_enabled: bool = True
     anti_raid_join_threshold: int = 5
@@ -98,6 +102,7 @@ def load_settings() -> Settings:
         invite_log_channel_id=_get_optional_int("INVITE_LOG_CHANNEL_ID"),
         verification_log_channel_id=_get_optional_int("VERIFICATION_LOG_CHANNEL_ID"),
         welcome_channel_id=_get_optional_int("WELCOME_CHANNEL_ID"),
+        instagram_notification_channel_id=_get_optional_int("INSTAGRAM_NOTIFICATION_CHANNEL_ID"),
         staff_application_channel_id=_require_int("STAFF_APPLICATION_CHANNEL_ID"),
         moderator_role_id=_require_int("MODERATOR_ROLE_ID"),
         admin_role_id=_require_int("ADMIN_ROLE_ID"),
@@ -105,6 +110,9 @@ def load_settings() -> Settings:
         verified_role_id=_get_optional_int("VERIFIED_ROLE_ID"),
         database_url=os.getenv("DATABASE_URL", "").strip(),
         welcome_banner_url=os.getenv("WELCOME_BANNER_URL", "").strip(),
+        instagram_feed_url=os.getenv("INSTAGRAM_FEED_URL", "").strip(),
+        instagram_profile_name=os.getenv("INSTAGRAM_PROFILE_NAME", "Instagram").strip() or "Instagram",
+        instagram_poll_minutes=_get_int("INSTAGRAM_POLL_MINUTES", 10, minimum=1),
         level_xp_increment=_get_int("LEVEL_XP_INCREMENT", 10, minimum=1),
         anti_raid_enabled=_get_bool("ANTI_RAID_ENABLED", True),
         anti_raid_join_threshold=_get_int("ANTI_RAID_JOIN_THRESHOLD", 5, minimum=2),
