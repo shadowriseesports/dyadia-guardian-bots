@@ -100,7 +100,7 @@ async def fetch_manageable_guilds(request: Request, settings: DashboardSettings)
 
 async def fetch_bot_resources(guild_id: int, settings: DashboardSettings) -> Dict[str, List[Dict[str, Any]]]:
     if not settings.bot_api_token:
-        return {"channels": [], "roles": []}
+        return {"channels": [], "forum_channels": [], "roles": []}
 
     channels: List[Dict[str, Any]] = []
     roles: List[Dict[str, Any]] = []
