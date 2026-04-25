@@ -2,18 +2,41 @@
 {% block content %}
 <section class="section">
     <div class="section-header">
-        <h1>Your Servers</h1>
-        <p>Only servers where you have Administrator or Manage Server are shown here.</p>
+        <div>
+            <span class="section-kicker">🛰️ Server Workspace</span>
+            <h1>Your Servers</h1>
+            <p>Only servers where you have Administrator or Manage Server are shown here.</p>
+        </div>
+        <div class="chip-row">
+            <span class="chip">🎯 {{ guilds|length }} server{% if guilds|length != 1 %}s{% endif %}</span>
+            <span class="chip">🔒 Discord OAuth</span>
+        </div>
     </div>
     <div class="grid">
         {% for guild in guilds %}
         <a class="card guild-card" href="/dashboard/{{ guild.id }}">
-            <h2>{{ guild.name }}</h2>
-            <p>Guild ID: {{ guild.id }}</p>
+            <div class="guild-card-header">
+                <div class="guild-mark">🏰</div>
+                <div>
+                    <h2>{{ guild.name }}</h2>
+                    <p class="guild-id">Guild ID: {{ guild.id }}</p>
+                </div>
+            </div>
+            <div class="metric-grid">
+                <div class="metric">
+                    <strong>⚡ Ready to manage</strong>
+                    <p>Open settings, review sections, and save bot behavior.</p>
+                </div>
+            </div>
+            <div class="tag-row">
+                <span class="chip">🛠️ Manageable</span>
+                <span class="chip">📋 Dashboard Enabled</span>
+            </div>
         </a>
         {% else %}
-        <div class="card">
-            <p>No manageable Discord servers were found for this account.</p>
+        <div class="card empty-card">
+            <h2>🚫 No manageable servers found</h2>
+            <p class="empty-state">Invite the bot and make sure your account has Administrator or Manage Server before coming back.</p>
         </div>
         {% endfor %}
     </div>

@@ -1,27 +1,43 @@
-{% macro text_field(name, label, value) -%}
+{% macro text_field(name, label, value, icon="✏️", help_text="") -%}
 <label class="field">
-    <span>{{ label }}</span>
+    <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+    {% if help_text %}
+    <span class="field-copy">{{ help_text }}</span>
+    {% endif %}
     <input type="text" name="{{ name }}" value="{{ value or '' }}">
 </label>
 {%- endmacro %}
 
-{% macro number_field(name, label, value) -%}
+{% macro number_field(name, label, value, icon="🔢", help_text="") -%}
 <label class="field">
-    <span>{{ label }}</span>
+    <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+    {% if help_text %}
+    <span class="field-copy">{{ help_text }}</span>
+    {% endif %}
     <input type="number" name="{{ name }}" value="{{ value or 0 }}" min="0">
 </label>
 {%- endmacro %}
 
-{% macro checkbox_field(name, label, checked) -%}
+{% macro checkbox_field(name, label, checked, icon="✅", help_text="") -%}
 <label class="field checkbox">
-    <span>{{ label }}</span>
-    <input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %}>
+    <div class="checkbox-row">
+        <div>
+            <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+            {% if help_text %}
+            <span class="field-copy">{{ help_text }}</span>
+            {% endif %}
+        </div>
+        <input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %}>
+    </div>
 </label>
 {%- endmacro %}
 
-{% macro channel_field(name, label, value, channels) -%}
+{% macro channel_field(name, label, value, channels, icon="📡", help_text="") -%}
 <label class="field">
-    <span>{{ label }}</span>
+    <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+    {% if help_text %}
+    <span class="field-copy">{{ help_text }}</span>
+    {% endif %}
     <input type="number" name="{{ name }}" value="{{ value or 0 }}" min="0" list="{{ name }}-options">
     <datalist id="{{ name }}-options">
         {% for channel in channels %}
@@ -31,9 +47,12 @@
 </label>
 {%- endmacro %}
 
-{% macro role_field(name, label, value, roles) -%}
+{% macro role_field(name, label, value, roles, icon="🎭", help_text="") -%}
 <label class="field">
-    <span>{{ label }}</span>
+    <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+    {% if help_text %}
+    <span class="field-copy">{{ help_text }}</span>
+    {% endif %}
     <input type="number" name="{{ name }}" value="{{ value or 0 }}" min="0" list="{{ name }}-options">
     <datalist id="{{ name }}-options">
         {% for role in roles %}

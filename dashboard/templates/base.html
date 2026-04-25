@@ -8,16 +8,21 @@
 </head>
 <body>
     <header class="topbar">
-        <div>
-            <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
-            <p class="subtitle">Railway-ready control panel for your Discord bot</p>
+        <div class="brand-wrap">
+            <div class="brand-mark">🛡️</div>
+            <div>
+                <span class="eyebrow">Bot Control Center</span>
+                <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
+                <p class="subtitle">Professional control panel for moderation, welcome flows, leveling, logs, anti-raid, and brand settings.</p>
+            </div>
         </div>
         <nav class="topnav">
             {% if session_user %}
-            <span class="pill">{{ session_user.username }}</span>
-            <a class="link-button" href="/logout">Logout</a>
+            <span class="pill">👋 {{ session_user.username }}</span>
+            <a class="link-button" href="/dashboard">🏠 Overview</a>
+            <a class="ghost-button" href="/logout">↩ Logout</a>
             {% else %}
-            <a class="link-button" href="/login">Login with Discord</a>
+            <a class="link-button" href="/login">🔐 Login with Discord</a>
             {% endif %}
         </nav>
     </header>
