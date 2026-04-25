@@ -132,7 +132,7 @@ def render(request: Request, template_name: str, context: Dict[str, Any]) -> HTM
         "session_user": request.session.get("user"),
     }
     base_context.update(context)
-    return templates.TemplateResponse(template_name, base_context)
+    return templates.TemplateResponse(request=request, name=template_name, context=base_context)
 
 
 @app.get("/", response_class=HTMLResponse)
