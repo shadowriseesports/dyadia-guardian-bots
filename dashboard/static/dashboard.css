@@ -576,8 +576,7 @@ p {
 }
 
 .sticky-card {
-    position: sticky;
-    top: 5.7rem;
+    position: static;
 }
 
 .audit-list {
@@ -668,9 +667,6 @@ p {
         grid-template-columns: 1fr;
     }
 
-    .sticky-card {
-        position: static;
-    }
 }
 
 @media (max-width: 720px) {
