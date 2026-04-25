@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section">
+    <div class="section-header">
+        <h1>Your Servers</h1>
+        <p>Only servers where you have Administrator or Manage Server are shown here.</p>
+    </div>
+    <div class="grid">
+        {% for guild in guilds %}
+        <a class="card guild-card" href="/dashboard/{{ guild.id }}">
+            <h2>{{ guild.name }}</h2>
+            <p>Guild ID: {{ guild.id }}</p>
+        </a>
+        {% else %}
+        <div class="card">
+            <p>No manageable Discord servers were found for this account.</p>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

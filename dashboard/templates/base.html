@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title or "Dyadia Guardian Dashboard" }}</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
+            <p class="subtitle">Railway-ready control panel for your Discord bot</p>
+        </div>
+        <nav class="topnav">
+            {% if session_user %}
+            <span class="pill">{{ session_user.username }}</span>
+            <a class="link-button" href="/logout">Logout</a>
+            {% else %}
+            <a class="link-button" href="/login">Login with Discord</a>
+            {% endif %}
+        </nav>
+    </header>
+    <main class="page">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

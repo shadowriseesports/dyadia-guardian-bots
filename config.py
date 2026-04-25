@@ -39,6 +39,16 @@ class Settings:
     bot_status_text: str = "Guardian of Honor of Kings | Northeast india"
 
 
+@dataclass(frozen=True)
+class DashboardSettings:
+    database_url: str
+    discord_client_id: str
+    discord_client_secret: str
+    discord_redirect_uri: str
+    session_secret: str
+    bot_api_token: str = ""
+
+
 def _require_int(name: str) -> int:
     raw_value = os.getenv(name, "").strip()
     if not raw_value:
@@ -89,6 +99,13 @@ def _get_optional_int(name: str) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
 
 
+def _require_str(name: str) -> str:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return raw_value
+
+
 def load_settings() -> Settings:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
@@ -122,4 +139,15 @@ def load_settings() -> Settings:
         anti_raid_timeout_minutes=_get_int("ANTI_RAID_TIMEOUT_MINUTES", 30, minimum=1),
         bot_status_text=os.getenv("BOT_STATUS_TEXT", "Guardian of Honor of Kings | Northeast india").strip()
         or "Guardian of Honor of Kings | Northeast india",
+    )
+
+
+def load_dashboard_settings() -> DashboardSettings:
+    return DashboardSettings(
+        database_url=_require_str("DATABASE_URL"),
+        discord_client_id=_require_str("DISCORD_CLIENT_ID"),
+        discord_client_secret=_require_str("DISCORD_CLIENT_SECRET"),
+        discord_redirect_uri=_require_str("DISCORD_REDIRECT_URI"),
+        session_secret=_require_str("SESSION_SECRET"),
+        bot_api_token=os.getenv("DISCORD_TOKEN", "").strip(),
     )

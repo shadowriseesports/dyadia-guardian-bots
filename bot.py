@@ -22,6 +22,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import Settings, load_settings
+from settings_store import GuildSettings, ensure_settings_tables, load_all_guild_settings
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -614,6 +615,34 @@ class DyadiaGuardianBot(commands.Bot):
         self.invite_counts: Dict[int, Dict[int, int]] = {}
         self.invite_cache: Dict[int, Dict[str, InviteSnapshot]] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
+        self.default_guild_settings = GuildSettings(
+            modmail_forum_id=self.settings.modmail_forum_id,
+            mod_log_channel_id=self.settings.mod_log_channel_id,
+            staff_application_channel_id=self.settings.staff_application_channel_id,
+            moderator_role_id=self.settings.moderator_role_id,
+            admin_role_id=self.settings.admin_role_id,
+            server_log_channel_id=self.settings.server_log_channel_id,
+            invite_log_channel_id=self.settings.invite_log_channel_id,
+            level_up_channel_id=self.settings.level_up_channel_id,
+            verification_log_channel_id=self.settings.verification_log_channel_id,
+            welcome_channel_id=self.settings.welcome_channel_id,
+            instagram_notification_channel_id=self.settings.instagram_notification_channel_id,
+            verified_role_id=self.settings.verified_role_id,
+            welcome_banner_url=self.settings.welcome_banner_url,
+            instagram_feed_url=self.settings.instagram_feed_url,
+            instagram_profile_name=self.settings.instagram_profile_name,
+            instagram_poll_minutes=self.settings.instagram_poll_minutes,
+            level_xp_increment=self.settings.level_xp_increment,
+            anti_raid_enabled=self.settings.anti_raid_enabled,
+            anti_raid_join_threshold=self.settings.anti_raid_join_threshold,
+            anti_raid_window_seconds=self.settings.anti_raid_window_seconds,
+            anti_raid_lockdown_minutes=self.settings.anti_raid_lockdown_minutes,
+            anti_raid_account_age_minutes=self.settings.anti_raid_account_age_minutes,
+            anti_raid_timeout_minutes=self.settings.anti_raid_timeout_minutes,
+            server_name=self.settings.server_name,
+            bot_status_text=self.settings.bot_status_text,
+        )
+        self.guild_settings_cache: Dict[int, GuildSettings] = {}
         self.instagram_seen_ids: set[str] = set()
         self.instagram_seen_order: List[str] = []
         self.instagram_last_checked_at: Optional[datetime] = None
@@ -626,6 +655,9 @@ class DyadiaGuardianBot(commands.Bot):
         self.staff_application_view = StaffApplicationView()
 
     async def setup_hook(self) -> None:
+        if self.uses_postgres:
+            await asyncio.to_thread(ensure_settings_tables, self.settings.database_url)
+            await self.refresh_guild_settings_cache_once()
         await self.load_level_data()
         await self.load_invite_data()
         await self.load_autoreact_data()
@@ -636,14 +668,16 @@ class DyadiaGuardianBot(commands.Bot):
         self.add_view(self.verification_view)
         self.add_view(self.staff_application_view)
         self.cleanup_inactive_modmail.start()
-        self.instagram_feed_loop.change_interval(minutes=self.settings.instagram_poll_minutes)
+        if self.uses_postgres:
+            self.refresh_guild_settings_cache.start()
+        self.instagram_feed_loop.change_interval(minutes=self.get_primary_guild_settings().instagram_poll_minutes)
         if self.instagram_notifications_enabled():
             self.instagram_feed_loop.start()
 
     async def on_ready(self) -> None:
         synced = await self.tree.sync()
         if self.user is not None:
-            activity = discord.CustomActivity(name=self.settings.bot_status_text)
+            activity = discord.CustomActivity(name=self.get_primary_guild_settings().bot_status_text)
             await self.change_presence(status=discord.Status.idle, activity=activity)
         LOGGER.info("Bot online as %s (%s)", self.user, self.user.id if self.user else "unknown")
         LOGGER.info("Synced %s application commands", len(synced))
@@ -1073,12 +1107,36 @@ class DyadiaGuardianBot(commands.Bot):
         tree.add_command(anti_raid)
         tree.add_command(autoreact)
 
+    def get_primary_guild(self) -> Optional[discord.Guild]:
+        return self.guilds[0] if self.guilds else None
+
+    def get_primary_guild_settings(self) -> GuildSettings:
+        primary = self.get_primary_guild()
+        if primary is None:
+            return self.default_guild_settings
+        return self.get_guild_settings(primary.id)
+
+    def get_guild_settings(self, guild_id: Optional[int]) -> GuildSettings:
+        if guild_id is None:
+            return self.default_guild_settings
+        return self.guild_settings_cache.get(guild_id, self.default_guild_settings)
+
+    async def refresh_guild_settings_cache_once(self) -> None:
+        if not self.uses_postgres:
+            return
+        self.guild_settings_cache = await asyncio.to_thread(
+            load_all_guild_settings,
+            self.settings.database_url,
+            self.default_guild_settings,
+        )
+
     def has_staff_access(self, member: discord.Member, permission: str) -> bool:
+        guild_settings = self.get_guild_settings(member.guild.id)
         if member.guild_permissions.administrator:
             return True
 
         role_ids = {role.id for role in member.roles}
-        if self.settings.admin_role_id in role_ids or self.settings.moderator_role_id in role_ids:
+        if guild_settings.admin_role_id in role_ids or guild_settings.moderator_role_id in role_ids:
             return True
 
         return getattr(member.guild_permissions, permission)
@@ -1114,10 +1172,11 @@ class DyadiaGuardianBot(commands.Bot):
         return None
 
     def create_modmail_intro_embed(self) -> discord.Embed:
+        guild_settings = self.get_primary_guild_settings()
         return make_embed(
             "Support Desk",
             (
-                f"Welcome to **{self.settings.server_name}**.\n\n"
+                f"Welcome to **{guild_settings.server_name}**.\n\n"
                 "If you need assistance, please use **Open Modmail** to contact the moderation team privately.\n\n"
                 "This system can be used for reports, appeals, rule clarifications, or safety-related concerns.\n\n"
                 "All moderator replies will be sent here in direct messages."
@@ -1195,8 +1254,9 @@ class DyadiaGuardianBot(commands.Bot):
         )
 
     def get_verified_role(self, guild: discord.Guild) -> Optional[discord.Role]:
-        if self.settings.verified_role_id:
-            role = guild.get_role(self.settings.verified_role_id)
+        guild_settings = self.get_guild_settings(guild.id)
+        if guild_settings.verified_role_id:
+            role = guild.get_role(guild_settings.verified_role_id)
             if role is not None:
                 return role
 
@@ -1251,22 +1311,24 @@ class DyadiaGuardianBot(commands.Bot):
 
         return TOKEN_REFERENCE_RE.sub(replace_token, value)
 
-    async def get_welcome_channel(self) -> Optional[discord.TextChannel]:
-        if not self.settings.welcome_channel_id:
+    async def get_welcome_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
+        guild_settings = self.get_guild_settings(guild.id)
+        if not guild_settings.welcome_channel_id:
             return None
-        channel = self.get_channel(self.settings.welcome_channel_id)
+        channel = self.get_channel(guild_settings.welcome_channel_id)
         if channel is None:
             try:
-                channel = await self.fetch_channel(self.settings.welcome_channel_id)
+                channel = await self.fetch_channel(guild_settings.welcome_channel_id)
             except discord.HTTPException:
-                LOGGER.exception("Could not fetch welcome channel %s", self.settings.welcome_channel_id)
+                LOGGER.exception("Could not fetch welcome channel %s", guild_settings.welcome_channel_id)
                 return None
         if isinstance(channel, discord.TextChannel):
             return channel
-        LOGGER.warning("Configured welcome channel is not a text channel: %s", self.settings.welcome_channel_id)
+        LOGGER.warning("Configured welcome channel is not a text channel: %s", guild_settings.welcome_channel_id)
         return None
 
     def create_welcome_embed(self, member: discord.Member) -> discord.Embed:
+        guild_settings = self.get_guild_settings(member.guild.id)
         verified_role = self.get_verified_role(member.guild)
         verified_role_text = verified_role.mention if verified_role is not None else "@Verified"
         verify_channel = self.format_channel_reference(member.guild, "verify")
@@ -1293,11 +1355,11 @@ class DyadiaGuardianBot(commands.Bot):
         )
         embed.set_footer(text=BRAND_FOOTER)
         embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
-        embed.set_image(url=self.settings.welcome_banner_url or DEFAULT_WELCOME_BANNER_URL)
+        embed.set_image(url=guild_settings.welcome_banner_url or DEFAULT_WELCOME_BANNER_URL)
         return embed
 
     async def send_welcome_message(self, member: discord.Member) -> None:
-        channel = await self.get_welcome_channel()
+        channel = await self.get_welcome_channel(member.guild)
         if channel is None:
             return
         await channel.send(
@@ -1332,6 +1394,7 @@ class DyadiaGuardianBot(commands.Bot):
         return embed
 
     def create_leveling_panel_embed(self, guild: discord.Guild) -> discord.Embed:
+        guild_settings = self.get_guild_settings(guild.id)
         reward_lines = []
         for required_level, role_name in LEVEL_REWARD_ROLES:
             role = find_reward_role(guild, role_name, required_level)
@@ -1363,7 +1426,7 @@ class DyadiaGuardianBot(commands.Bot):
             value=(
                 f"- Gain {LEVEL_XP_GAIN_MIN}-{LEVEL_XP_GAIN_MAX} XP for active messages\n"
                 "- Every qualifying message can earn XP\n"
-                f"- Required XP increases by {self.settings.level_xp_increment} each level\n"
+                f"- Required XP increases by {guild_settings.level_xp_increment} each level\n"
                 "- Only the most dedicated members will reach Level 1000"
             ),
             inline=False,
@@ -1398,17 +1461,19 @@ class DyadiaGuardianBot(commands.Bot):
         embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
         return embed
 
-    async def send_modlog(self, embed: discord.Embed) -> None:
-        channel = self.get_channel(self.settings.mod_log_channel_id)
+    async def send_modlog(self, embed: discord.Embed, guild: Optional[discord.Guild] = None) -> None:
+        guild_settings = self.get_guild_settings(guild.id if guild is not None else self.get_primary_guild().id if self.get_primary_guild() else None)
+        channel = self.get_channel(guild_settings.mod_log_channel_id)
         if channel is None:
-            channel = await self.fetch_channel(self.settings.mod_log_channel_id)
+            channel = await self.fetch_channel(guild_settings.mod_log_channel_id)
         if isinstance(channel, discord.TextChannel):
             await channel.send(embed=embed)
         else:
-            LOGGER.warning("Configured mod log channel is not a text channel: %s", self.settings.mod_log_channel_id)
+            LOGGER.warning("Configured mod log channel is not a text channel: %s", guild_settings.mod_log_channel_id)
 
-    async def get_server_log_channel(self) -> Optional[discord.TextChannel]:
-        channel_id = self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+    async def get_server_log_channel(self, guild: Optional[discord.Guild] = None) -> Optional[discord.TextChannel]:
+        guild_settings = self.get_guild_settings(guild.id if guild is not None else self.get_primary_guild().id if self.get_primary_guild() else None)
+        channel_id = guild_settings.server_log_channel_id or guild_settings.mod_log_channel_id
         channel = self.get_channel(channel_id)
         if channel is None:
             try:
@@ -1421,8 +1486,9 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured server log channel is not a text channel: %s", channel_id)
         return None
 
-    async def get_invite_log_channel(self) -> Optional[discord.TextChannel]:
-        channel_id = self.settings.invite_log_channel_id or self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+    async def get_invite_log_channel(self, guild: Optional[discord.Guild] = None) -> Optional[discord.TextChannel]:
+        guild_settings = self.get_guild_settings(guild.id if guild is not None else self.get_primary_guild().id if self.get_primary_guild() else None)
+        channel_id = guild_settings.invite_log_channel_id or guild_settings.server_log_channel_id or guild_settings.mod_log_channel_id
         channel = self.get_channel(channel_id)
         if channel is None:
             try:
@@ -1435,8 +1501,9 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured invite log channel is not a text channel: %s", channel_id)
         return None
 
-    async def get_verification_log_channel(self) -> Optional[discord.TextChannel]:
-        channel_id = self.settings.verification_log_channel_id or self.settings.server_log_channel_id or self.settings.mod_log_channel_id
+    async def get_verification_log_channel(self, guild: Optional[discord.Guild] = None) -> Optional[discord.TextChannel]:
+        guild_settings = self.get_guild_settings(guild.id if guild is not None else self.get_primary_guild().id if self.get_primary_guild() else None)
+        channel_id = guild_settings.verification_log_channel_id or guild_settings.server_log_channel_id or guild_settings.mod_log_channel_id
         channel = self.get_channel(channel_id)
         if channel is None:
             try:
@@ -1449,19 +1516,19 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured verification log channel is not a text channel: %s", channel_id)
         return None
 
-    async def send_server_log(self, embed: discord.Embed) -> Optional[discord.Message]:
-        channel = await self.get_server_log_channel()
+    async def send_server_log(self, embed: discord.Embed, guild: Optional[discord.Guild] = None) -> Optional[discord.Message]:
+        channel = await self.get_server_log_channel(guild)
         if channel is not None:
             return await channel.send(embed=embed)
         return None
 
-    async def send_invite_log(self, embed: discord.Embed) -> None:
-        channel = await self.get_invite_log_channel()
+    async def send_invite_log(self, embed: discord.Embed, guild: Optional[discord.Guild] = None) -> None:
+        channel = await self.get_invite_log_channel(guild)
         if channel is not None:
             await channel.send(embed=embed)
 
-    async def send_verification_log(self, embed: discord.Embed) -> None:
-        channel = await self.get_verification_log_channel()
+    async def send_verification_log(self, embed: discord.Embed, guild: Optional[discord.Guild] = None) -> None:
+        channel = await self.get_verification_log_channel(guild)
         if channel is not None:
             await channel.send(embed=embed)
 
@@ -1946,15 +2013,16 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Reason/Details", value=truncate_text(reason, 1024), inline=False)
         await self.send_server_log(embed)
 
-    async def get_staff_application_channel(self) -> Optional[discord.TextChannel]:
-        channel = self.get_channel(self.settings.staff_application_channel_id)
+    async def get_staff_application_channel(self, guild: Optional[discord.Guild] = None) -> Optional[discord.TextChannel]:
+        guild_settings = self.get_guild_settings(guild.id if guild is not None else self.get_primary_guild().id if self.get_primary_guild() else None)
+        channel = self.get_channel(guild_settings.staff_application_channel_id)
         if channel is None:
-            channel = await self.fetch_channel(self.settings.staff_application_channel_id)
+            channel = await self.fetch_channel(guild_settings.staff_application_channel_id)
         if isinstance(channel, discord.TextChannel):
             return channel
         LOGGER.warning(
             "Configured staff application channel is not a text channel: %s",
-            self.settings.staff_application_channel_id,
+            guild_settings.staff_application_channel_id,
         )
         return None
 
@@ -2394,7 +2462,8 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def sync_level_reward_role(self, member: discord.Member, *, announce: bool) -> None:
         progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
+        guild_settings = self.get_guild_settings(member.guild.id)
+        level = level_from_xp(progress.xp, guild_settings.level_xp_increment)
         eligible_role_name = get_reward_role_name(level)
         roles_to_remove = [role for role in member.roles if is_reward_role(role)]
         eligible_level = next((required_level for required_level, role_name in LEVEL_REWARD_ROLES if role_name == eligible_role_name), None)
@@ -2440,14 +2509,15 @@ class DyadiaGuardianBot(commands.Bot):
     async def award_message_xp(self, member: discord.Member) -> Optional[tuple[int, int]]:
         now = utc_now()
         progress = self.get_level_progress(member.guild.id, member.id)
-        old_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
+        guild_settings = self.get_guild_settings(member.guild.id)
+        old_level = level_from_xp(progress.xp, guild_settings.level_xp_increment)
         gained_xp = random.randint(LEVEL_XP_GAIN_MIN, LEVEL_XP_GAIN_MAX)
         progress.xp += gained_xp
         progress.messages += 1
         progress.last_message_at = now
         await self.persist_level_progress(member.guild.id, member.id, progress)
 
-        new_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
+        new_level = level_from_xp(progress.xp, guild_settings.level_xp_increment)
         return old_level, new_level
 
     async def handle_leveling_message(self, message: discord.Message) -> None:
@@ -2483,29 +2553,31 @@ class DyadiaGuardianBot(commands.Bot):
         fallback_channel: discord.abc.Messageable,
         embed: discord.Embed,
     ) -> None:
-        if self.settings.level_up_channel_id:
+        guild_settings = self.get_guild_settings(guild.id)
+        if guild_settings.level_up_channel_id:
             try:
-                channel = self.get_channel(self.settings.level_up_channel_id)
+                channel = self.get_channel(guild_settings.level_up_channel_id)
                 if channel is None:
-                    channel = await self.fetch_channel(self.settings.level_up_channel_id)
+                    channel = await self.fetch_channel(guild_settings.level_up_channel_id)
                 if isinstance(channel, discord.TextChannel):
                     await channel.send(embed=embed)
                     return
                 LOGGER.warning(
                     "LEVEL_UP_CHANNEL_ID is not a text channel: %s",
-                    self.settings.level_up_channel_id,
+                    guild_settings.level_up_channel_id,
                 )
             except discord.HTTPException:
-                LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
+                LOGGER.exception("Could not fetch level-up channel %s", guild_settings.level_up_channel_id)
 
         if isinstance(fallback_channel, (discord.TextChannel, discord.Thread)):
             await fallback_channel.send(embed=embed, delete_after=20)
 
     def create_rank_embed(self, member: discord.Member) -> discord.Embed:
         progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
-        current_level_xp = xp_for_level(level, self.settings.level_xp_increment)
-        next_level_xp = xp_for_level(level + 1, self.settings.level_xp_increment)
+        guild_settings = self.get_guild_settings(member.guild.id)
+        level = level_from_xp(progress.xp, guild_settings.level_xp_increment)
+        current_level_xp = xp_for_level(level, guild_settings.level_xp_increment)
+        next_level_xp = xp_for_level(level + 1, guild_settings.level_xp_increment)
         xp_into_level = progress.xp - current_level_xp
         xp_needed = max(1, next_level_xp - current_level_xp)
         reward_name = get_reward_role_name(level) or "Unranked"
@@ -2584,7 +2656,8 @@ class DyadiaGuardianBot(commands.Bot):
         return make_embed("Auto-Reactions", "\n".join(lines), discord.Color.blurple())
 
     def instagram_notifications_enabled(self) -> bool:
-        return bool(self.settings.instagram_feed_url and self.settings.instagram_notification_channel_id)
+        guild_settings = self.get_primary_guild_settings()
+        return bool(guild_settings.instagram_feed_url and guild_settings.instagram_notification_channel_id)
 
     async def load_instagram_state(self) -> None:
         seen_order = await asyncio.to_thread(self._load_instagram_state_sync)
@@ -2709,8 +2782,9 @@ class DyadiaGuardianBot(commands.Bot):
         return entries
 
     def fetch_instagram_feed_sync(self) -> List[InstagramFeedEntry]:
+        guild_settings = self.get_primary_guild_settings()
         request = urllib_request.Request(
-            self.settings.instagram_feed_url,
+            guild_settings.instagram_feed_url,
             headers={
                 "User-Agent": "DyadiaGuardianBot/1.0 (+Discord Instagram notifier)",
                 "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
@@ -2724,7 +2798,8 @@ class DyadiaGuardianBot(commands.Bot):
         return await asyncio.to_thread(self.fetch_instagram_feed_sync)
 
     async def get_instagram_notification_channel(self) -> Optional[discord.TextChannel]:
-        channel_id = self.settings.instagram_notification_channel_id
+        guild_settings = self.get_primary_guild_settings()
+        channel_id = guild_settings.instagram_notification_channel_id
         if not channel_id:
             return None
 
@@ -2743,6 +2818,7 @@ class DyadiaGuardianBot(commands.Bot):
         return None
 
     def create_instagram_notification_embed(self, entry: InstagramFeedEntry) -> discord.Embed:
+        guild_settings = self.get_primary_guild_settings()
         label = "New Instagram Reel" if entry.is_reel else "New Instagram Post"
         description_parts = [f"[Open on Instagram]({entry.link})"]
         if entry.description:
@@ -2752,7 +2828,7 @@ class DyadiaGuardianBot(commands.Bot):
             label,
             "\n\n".join(description_parts),
             discord.Color.magenta(),
-            footer=f"{BRAND_FOOTER} | {self.settings.instagram_profile_name}",
+            footer=f"{BRAND_FOOTER} | {guild_settings.instagram_profile_name}",
         )
         embed.title = truncate_text(entry.title, 256)
         embed.url = entry.link
@@ -2763,18 +2839,19 @@ class DyadiaGuardianBot(commands.Bot):
         return embed
 
     def create_instagram_status_embed(self, channel: Optional[discord.TextChannel]) -> discord.Embed:
+        guild_settings = self.get_primary_guild_settings()
         enabled = self.instagram_notifications_enabled()
         lines = [
             f"Status: **{'Enabled' if enabled else 'Disabled'}**",
-            f"Profile label: **{self.settings.instagram_profile_name}**",
-            f"Poll interval: **{self.settings.instagram_poll_minutes} minute(s)**",
+            f"Profile label: **{guild_settings.instagram_profile_name}**",
+            f"Poll interval: **{guild_settings.instagram_poll_minutes} minute(s)**",
             f"Target channel: {channel.mention if channel is not None else 'Not available'}",
             f"Tracked sent items: **{len(self.instagram_seen_order)}**",
             f"Last successful check: **{self.instagram_last_success_at.isoformat() if self.instagram_last_success_at else 'Never'}**",
             f"Last check error: **{self.instagram_last_error or 'None'}**",
         ]
-        if self.settings.instagram_feed_url:
-            lines.insert(1, f"Feed URL: {self.settings.instagram_feed_url}")
+        if guild_settings.instagram_feed_url:
+            lines.insert(1, f"Feed URL: {guild_settings.instagram_feed_url}")
         else:
             lines.insert(1, "Feed URL: Not configured")
         return make_embed("Instagram Notifications", "\n".join(lines), discord.Color.blurple())
@@ -3126,7 +3203,7 @@ class DyadiaGuardianBot(commands.Bot):
             member = interaction.guild.get_member(user_id)
             display_name = member.display_name if member is not None else f"User {user_id}"
             lines.append(
-                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.settings.level_xp_increment)} ({progress.xp} XP)"
+                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.get_guild_settings(interaction.guild.id).level_xp_increment)} ({progress.xp} XP)"
             )
 
         embed = make_embed(
@@ -3342,7 +3419,7 @@ class DyadiaGuardianBot(commands.Bot):
     def get_anti_raid_state(self, guild_id: int) -> AntiRaidState:
         state = self.anti_raid_states.get(guild_id)
         if state is None:
-            state = AntiRaidState(enabled=self.settings.anti_raid_enabled)
+            state = AntiRaidState(enabled=self.get_guild_settings(guild_id).anti_raid_enabled)
             self.anti_raid_states[guild_id] = state
         return state
 
@@ -3350,16 +3427,18 @@ class DyadiaGuardianBot(commands.Bot):
         return state.lockdown_until is not None and state.lockdown_until > utc_now()
 
     def prune_anti_raid_events(self, state: AntiRaidState, now: datetime) -> None:
-        window = timedelta(seconds=self.settings.anti_raid_window_seconds)
+        primary_settings = self.get_primary_guild_settings()
+        window = timedelta(seconds=primary_settings.anti_raid_window_seconds)
         while state.join_events and (now - state.join_events[0]) > window:
             state.join_events.popleft()
 
     async def send_anti_raid_alert(self, guild: discord.Guild, title: str, description: str) -> None:
         embed = make_embed(title, description, discord.Color.dark_orange())
         embed.add_field(name="Server", value=f"{guild.name} (`{guild.id}`)", inline=False)
-        await self.send_modlog(embed)
+        await self.send_modlog(embed, guild)
 
     def create_anti_raid_status_embed(self, guild: discord.Guild, state: AntiRaidState) -> discord.Embed:
+        guild_settings = self.get_guild_settings(guild.id)
         active = self.anti_raid_is_active(state)
         remaining = "Inactive"
         if active and state.lockdown_until is not None:
@@ -3375,16 +3454,16 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(
             name="Trigger Rule",
             value=(
-                f"{self.settings.anti_raid_join_threshold} joins in "
-                f"{self.settings.anti_raid_window_seconds} seconds"
+                f"{guild_settings.anti_raid_join_threshold} joins in "
+                f"{guild_settings.anti_raid_window_seconds} seconds"
             ),
             inline=False,
         )
         embed.add_field(
             name="Auto Timeout",
             value=(
-                f"Accounts newer than {self.settings.anti_raid_account_age_minutes} minute(s) "
-                f"are timed out for {self.settings.anti_raid_timeout_minutes} minute(s) during raid mode."
+                f"Accounts newer than {guild_settings.anti_raid_account_age_minutes} minute(s) "
+                f"are timed out for {guild_settings.anti_raid_timeout_minutes} minute(s) during raid mode."
             ),
             inline=False,
         )
@@ -3402,9 +3481,10 @@ class DyadiaGuardianBot(commands.Bot):
         trigger_count: Optional[int] = None,
     ) -> AntiRaidState:
         state = self.get_anti_raid_state(guild.id)
+        guild_settings = self.get_guild_settings(guild.id)
         state.enabled = True
         state.manual_lockdown = manual
-        state.lockdown_until = utc_now() + timedelta(minutes=self.settings.anti_raid_lockdown_minutes)
+        state.lockdown_until = utc_now() + timedelta(minutes=guild_settings.anti_raid_lockdown_minutes)
         if trigger_count is not None:
             state.last_trigger_count = trigger_count
 
@@ -3412,7 +3492,7 @@ class DyadiaGuardianBot(commands.Bot):
         description = (
             f"{reason}\n\n"
             f"{source}\n"
-            f"Raid mode will stay active for {self.settings.anti_raid_lockdown_minutes} minute(s)."
+            f"Raid mode will stay active for {guild_settings.anti_raid_lockdown_minutes} minute(s)."
         )
         if trigger_count is not None:
             description += f"\nObserved joins in window: {trigger_count}"
@@ -3441,11 +3521,14 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         now = utc_now()
-        self.prune_anti_raid_events(state, now)
+        guild_settings = self.get_guild_settings(member.guild.id)
+        window = timedelta(seconds=guild_settings.anti_raid_window_seconds)
+        while state.join_events and (now - state.join_events[0]) > window:
+            state.join_events.popleft()
         state.join_events.append(now)
         trigger_count = len(state.join_events)
 
-        if trigger_count >= self.settings.anti_raid_join_threshold and not self.anti_raid_is_active(state):
+        if trigger_count >= guild_settings.anti_raid_join_threshold and not self.anti_raid_is_active(state):
             await self.activate_anti_raid(
                 member.guild,
                 None,
@@ -3458,11 +3541,11 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         account_age = now - member.created_at
-        minimum_age = timedelta(minutes=self.settings.anti_raid_account_age_minutes)
+        minimum_age = timedelta(minutes=guild_settings.anti_raid_account_age_minutes)
         if account_age > minimum_age:
             return
 
-        timeout_for = timedelta(minutes=self.settings.anti_raid_timeout_minutes)
+        timeout_for = timedelta(minutes=guild_settings.anti_raid_timeout_minutes)
         try:
             await member.timeout(timeout_for, reason="Anti-raid protection triggered")
         except discord.HTTPException:
@@ -3520,7 +3603,7 @@ class DyadiaGuardianBot(commands.Bot):
             manual=True,
         )
         await interaction.followup.send(
-            f"Raid mode is now active for {self.settings.anti_raid_lockdown_minutes} minute(s).",
+            f"Raid mode is now active for {self.get_guild_settings(interaction.guild.id).anti_raid_lockdown_minutes} minute(s).",
             ephemeral=True,
         )
 
@@ -3641,7 +3724,7 @@ class DyadiaGuardianBot(commands.Bot):
             )
             return
 
-        await self.send_verification_log(self.create_verification_log_embed(interaction.user, role))
+        await self.send_verification_log(self.create_verification_log_embed(interaction.user, role), interaction.guild)
         await interaction.response.send_message(
             f"Verification complete. You have been given {role.mention} and can now access all server channels.",
             ephemeral=True,
@@ -3682,11 +3765,12 @@ class DyadiaGuardianBot(commands.Bot):
         draft: StaffApplicationDraft,
     ) -> None:
         try:
-            channel = await self.get_staff_application_channel()
+            channel = await self.get_staff_application_channel(interaction.guild)
         except discord.HTTPException:
+            guild_settings = self.get_primary_guild_settings()
             LOGGER.exception(
                 "Could not fetch staff application review channel %s",
-                self.settings.staff_application_channel_id,
+                guild_settings.staff_application_channel_id,
             )
             await interaction.response.send_message(
                 "I could not find the staff application review channel. Please tell an admin to check the channel ID.",
@@ -3702,9 +3786,10 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         embed = self.create_staff_application_embed(interaction.user, draft, interaction.guild)
+        guild_settings = self.get_guild_settings(interaction.guild.id if interaction.guild is not None else None)
         try:
             await channel.send(
-                content=f"<@&{self.settings.admin_role_id}> New staff application received.",
+                content=f"<@&{guild_settings.admin_role_id}> New staff application received.",
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
@@ -3753,6 +3838,7 @@ class DyadiaGuardianBot(commands.Bot):
     async def open_modmail_from_button(self, interaction: discord.Interaction) -> None:
         user_id = interaction.user.id
         response_kwargs = self.interaction_response_kwargs(interaction)
+        guild_settings = self.get_primary_guild_settings()
 
         try:
             if self.is_on_cooldown(user_id):
@@ -3768,9 +3854,9 @@ class DyadiaGuardianBot(commands.Bot):
             else:
                 await interaction.response.defer(thinking=True, **response_kwargs)
 
-            forum = self.get_channel(self.settings.modmail_forum_id)
+            forum = self.get_channel(guild_settings.modmail_forum_id)
             if forum is None:
-                forum = await self.fetch_channel(self.settings.modmail_forum_id)
+                forum = await self.fetch_channel(guild_settings.modmail_forum_id)
             if not isinstance(forum, discord.ForumChannel):
                 if interaction.guild_id is None:
                     await interaction.channel.send("MODMAIL_FORUM_ID is not a forum channel.")
@@ -3780,7 +3866,7 @@ class DyadiaGuardianBot(commands.Bot):
 
             thread = await forum.create_thread(
                 name=f"modmail-{interaction.user.id}",
-                content=f"<@&{self.settings.moderator_role_id}> Modmail opened by {interaction.user.mention}",
+                content=f"<@&{guild_settings.moderator_role_id}> Modmail opened by {interaction.user.mention}",
                 embed=self.create_modmail_thread_embed(interaction.user, "Opened via DM button"),
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
@@ -3890,7 +3976,7 @@ class DyadiaGuardianBot(commands.Bot):
         user = self.get_user(session.user_id) or await self.fetch_user(session.user_id)
         session.last_activity = utc_now()
         embed = discord.Embed(
-            title=f"{self.settings.server_name} Moderator",
+            title=f"{self.get_primary_guild_settings().server_name} Moderator",
             description=message.content or "*No text content*",
             color=discord.Color.purple(),
             timestamp=utc_now(),
@@ -4112,6 +4198,22 @@ class DyadiaGuardianBot(commands.Bot):
             "Leveling storage backend: %s",
             "PostgreSQL" if self.uses_postgres else f"JSON file ({LEVEL_DATA_PATH})",
         )
+
+    @tasks.loop(minutes=1)
+    async def refresh_guild_settings_cache(self) -> None:
+        if not self.uses_postgres:
+            return
+
+        await self.refresh_guild_settings_cache_once()
+        primary_settings = self.get_primary_guild_settings()
+        self.instagram_feed_loop.change_interval(minutes=primary_settings.instagram_poll_minutes)
+        if self.user is not None:
+            activity = discord.CustomActivity(name=primary_settings.bot_status_text)
+            await self.change_presence(status=discord.Status.idle, activity=activity)
+
+    @refresh_guild_settings_cache.before_loop
+    async def before_refresh_guild_settings_cache(self) -> None:
+        await self.wait_until_ready()
 
     @tasks.loop(minutes=5)
     async def cleanup_inactive_modmail(self) -> None:

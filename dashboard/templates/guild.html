@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% import "macros.html" as forms %}
+{% block content %}
+<section class="section">
+    <div class="section-header">
+        <div>
+            <a class="link-button" href="/dashboard">Back</a>
+            <h1>{{ guild.name }}</h1>
+            <p>Guild ID: {{ guild.id }}</p>
+        </div>
+        {% if message == "saved" %}
+        <span class="pill success">Settings saved</span>
+        {% endif %}
+    </div>
+
+    <form method="post" action="/dashboard/{{ guild.id }}/save" class="settings-form">
+        <section class="card">
+            <h2>Core Channels</h2>
+            <div class="field-grid">
+                {{ forms.channel_field("modmail_forum_id", "Modmail Forum ID", guild_settings.modmail_forum_id, forum_channels) }}
+                {{ forms.channel_field("mod_log_channel_id", "Mod Log Channel ID", guild_settings.mod_log_channel_id, text_channels) }}
+                {{ forms.channel_field("server_log_channel_id", "Server Log Channel ID", guild_settings.server_log_channel_id, text_channels) }}
+                {{ forms.channel_field("invite_log_channel_id", "Invite Log Channel ID", guild_settings.invite_log_channel_id, text_channels) }}
+                {{ forms.channel_field("verification_log_channel_id", "Verification Log Channel ID", guild_settings.verification_log_channel_id, text_channels) }}
+                {{ forms.channel_field("welcome_channel_id", "Welcome Channel ID", guild_settings.welcome_channel_id, text_channels) }}
+                {{ forms.channel_field("staff_application_channel_id", "Staff Application Channel ID", guild_settings.staff_application_channel_id, text_channels) }}
+                {{ forms.channel_field("level_up_channel_id", "Level Up Channel ID", guild_settings.level_up_channel_id, text_channels) }}
+                {{ forms.channel_field("instagram_notification_channel_id", "Instagram Notification Channel ID", guild_settings.instagram_notification_channel_id, text_channels) }}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Roles</h2>
+            <div class="field-grid">
+                {{ forms.role_field("moderator_role_id", "Moderator Role ID", guild_settings.moderator_role_id, roles) }}
+                {{ forms.role_field("admin_role_id", "Admin Role ID", guild_settings.admin_role_id, roles) }}
+                {{ forms.role_field("verified_role_id", "Verified Role ID", guild_settings.verified_role_id, roles) }}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Branding And Presence</h2>
+            <div class="field-grid">
+                {{ forms.text_field("server_name", "Server Name", guild_settings.server_name) }}
+                {{ forms.text_field("bot_status_text", "Bot Status Text", guild_settings.bot_status_text) }}
+                {{ forms.text_field("welcome_banner_url", "Welcome Banner URL", guild_settings.welcome_banner_url) }}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Instagram</h2>
+            <div class="field-grid">
+                {{ forms.text_field("instagram_feed_url", "Instagram Feed URL", guild_settings.instagram_feed_url) }}
+                {{ forms.text_field("instagram_profile_name", "Instagram Profile Name", guild_settings.instagram_profile_name) }}
+                {{ forms.number_field("instagram_poll_minutes", "Instagram Poll Minutes", guild_settings.instagram_poll_minutes) }}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Leveling</h2>
+            <div class="field-grid">
+                {{ forms.number_field("level_xp_increment", "Level XP Increment", guild_settings.level_xp_increment) }}
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Anti-Raid</h2>
+            <div class="field-grid">
+                {{ forms.checkbox_field("anti_raid_enabled", "Enable Anti-Raid", guild_settings.anti_raid_enabled) }}
+                {{ forms.number_field("anti_raid_join_threshold", "Join Threshold", guild_settings.anti_raid_join_threshold) }}
+                {{ forms.number_field("anti_raid_window_seconds", "Window Seconds", guild_settings.anti_raid_window_seconds) }}
+                {{ forms.number_field("anti_raid_lockdown_minutes", "Lockdown Minutes", guild_settings.anti_raid_lockdown_minutes) }}
+                {{ forms.number_field("anti_raid_account_age_minutes", "Account Age Minutes", guild_settings.anti_raid_account_age_minutes) }}
+                {{ forms.number_field("anti_raid_timeout_minutes", "Timeout Minutes", guild_settings.anti_raid_timeout_minutes) }}
+            </div>
+        </section>
+
+        <div class="actions">
+            <button class="primary-button" type="submit">Save Settings</button>
+        </div>
+    </form>
+</section>
+
+<section class="section">
+    <div class="card">
+        <h2>Recent Audit Log</h2>
+        <div class="audit-list">
+            {% for entry in audit_entries %}
+            <div class="audit-entry">
+                <div><strong>User ID:</strong> {{ entry.updated_by or "Unknown" }}</div>
+                <div><strong>Changed:</strong> {{ ", ".join(entry.changed_keys) if entry.changed_keys else "No field changes" }}</div>
+                <div><strong>At:</strong> {{ entry.created_at }}</div>
+            </div>
+            {% else %}
+            <p>No dashboard changes have been saved yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}

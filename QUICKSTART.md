@@ -131,3 +131,18 @@ If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling and 
 5. Use `/instagramstatus` to confirm the feed URL, target channel, and poll interval
 6. Use `/instagramcheck` to run a manual poll
 7. Post a new Instagram reel or post, then wait for the next poll cycle and confirm the bot sends it to your configured channel
+
+## 13. Deploy the dashboard on Railway
+
+1. Create a second Railway service from the same repository
+2. Set its start command to `uvicorn dashboard.main:app --host 0.0.0.0 --port $PORT`
+3. Add these variables to the dashboard service:
+4. `DATABASE_URL`
+5. `DISCORD_CLIENT_ID`
+6. `DISCORD_CLIENT_SECRET`
+7. `DISCORD_REDIRECT_URI`
+8. `SESSION_SECRET`
+9. Optional: add `DISCORD_TOKEN` too if you want channel and role suggestions populated from the bot's guild data
+10. Generate a Railway domain for the dashboard service
+11. Add the exact callback URL to your Discord application OAuth2 redirect settings
+12. Sign in with Discord and save guild settings from the dashboard
