@@ -63,7 +63,9 @@
         <div class="control-hero-main">
             <a class="link-button" href="/dashboard">Back to Servers</a>
             <div class="title-row">
-                <div class="guild-mark">{{ guild.name[:2]|upper }}</div>
+                <div class="guild-mark image-mark large-mark">
+                    <img src="{{ guild.icon_url }}" alt="{{ guild.name }} icon">
+                </div>
                 <div>
                     <span class="section-kicker">Guild Control Panel</span>
                     <h1>{{ guild.name }}</h1>

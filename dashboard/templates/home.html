@@ -1,6 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="hero">
+    {% if error %}
+    <div class="card status-banner warn-banner" style="margin-bottom: 1rem;">
+        <div class="split-row">
+            <div>
+                {% if error == "oauth_state" %}
+                <span class="section-kicker">Login Session Expired</span>
+                <h2>Your Discord sign-in attempt could not be verified</h2>
+                <p>Start the login flow again from this page so the dashboard can create a fresh secure session.</p>
+                {% elif error == "oauth_token" %}
+                <span class="section-kicker">Discord Login Failed</span>
+                <h2>Discord rejected the OAuth token exchange</h2>
+                <p>Most often this means the OAuth code expired or the configured redirect URI, client ID, or client secret does not match the Discord application. {% if reason %}Reason: {{ reason.replace("_", " ") }}.{% endif %}</p>
+                {% else %}
+                <span class="section-kicker">Login Error</span>
+                <h2>The dashboard could not finish Discord sign-in</h2>
+                <p>Please try again. If this keeps happening, verify the Discord OAuth settings configured for the dashboard.</p>
+                {% endif %}
+            </div>
+            <a class="primary-button" href="/login">Try Discord Login Again</a>
+        </div>
+    </div>
+    {% endif %}
     <div class="hero-shell">
         <div class="card hero-card">
             <div class="hero-copy">

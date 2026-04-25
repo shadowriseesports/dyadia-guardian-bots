@@ -29,6 +29,11 @@ DISCORD_API_BASE = "https://discord.com/api"
 DISCORD_OAUTH_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 MANAGE_GUILD_PERMISSION = 0x20
 ADMINISTRATOR_PERMISSION = 0x8
+DEFAULT_APP_LOGO_URL = (
+    "https://cdn.discordapp.com/attachments/1494675962497859624/"
+    "1494773502362783936/hokne_community_logo_realistic.png"
+    "?ex=69e3d3ce&is=69e2824e&hm=7aa24fffd3c796925bc3947573334f7667874f2899c9a72d70aae32c3ee1215a&"
+)
 SETTINGS_FIELDS = list(GuildSettings().to_dict().keys())
 BOOLEAN_FIELDS = {key for key, value in GuildSettings().to_dict().items() if isinstance(value, bool)}
 CHANNEL_SETTING_FIELDS = {
@@ -129,6 +134,19 @@ async def exchange_code_for_token(code: str, settings: DashboardSettings) -> Dic
         return response.json()
 
 
+def summarize_http_error(exc: httpx.HTTPStatusError) -> str:
+    response = exc.response
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+
+    error_code = str(payload.get("error") or "").strip()
+    error_description = str(payload.get("error_description") or "").strip()
+    summary = error_description or error_code or f"HTTP {response.status_code}"
+    return summary.replace(" ", "_")[:80]
+
+
 def is_manageable_guild(guild: Dict[str, Any]) -> bool:
     try:
         permissions = int(guild.get("permissions", "0"))
@@ -161,7 +179,7 @@ async def fetch_manageable_guilds(request: Request, settings: DashboardSettings)
     guilds = [guild for guild in cached_guilds if isinstance(guild, dict)]
     if settings.locked_guild_id:
         guilds = [guild for guild in guilds if int(guild.get("id", 0)) == settings.locked_guild_id]
-    return guilds
+    return with_guild_visuals(guilds)
 
 
 async def fetch_bot_resources(guild_id: int, settings: DashboardSettings) -> Dict[str, List[Dict[str, Any]]]:
@@ -194,6 +212,7 @@ def render(request: Request, template_name: str, context: Dict[str, Any]) -> HTM
     base_context = {
         "request": request,
         "session_user": request.session.get("user"),
+        "app_logo_url": DEFAULT_APP_LOGO_URL,
     }
     base_context.update(context)
     return templates.TemplateResponse(request=request, name=template_name, context=base_context)
@@ -536,10 +555,35 @@ def normalize_channel_id(raw_value: Any) -> int:
     return int(cleaned) if cleaned.isdigit() else 0
 
 
+def build_guild_icon_url(guild: Dict[str, Any]) -> str:
+    guild_id = str(guild.get("id") or "").strip()
+    icon_hash = str(guild.get("icon") or "").strip()
+    if guild_id and icon_hash:
+        extension = "gif" if icon_hash.startswith("a_") else "png"
+        return f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.{extension}?size=256"
+    return DEFAULT_APP_LOGO_URL
+
+
+def with_guild_visuals(guilds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    decorated: List[Dict[str, Any]] = []
+    for guild in guilds:
+        entry = dict(guild)
+        entry["icon_url"] = build_guild_icon_url(entry)
+        decorated.append(entry)
+    return decorated
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
     if "user" not in request.session:
-        return render(request, "home.html", {})
+        return render(
+            request,
+            "home.html",
+            {
+                "error": request.query_params.get("error", "").strip(),
+                "reason": request.query_params.get("reason", "").strip(),
+            },
+        )
     return RedirectResponse("/dashboard", status_code=303)
 
 
@@ -567,10 +611,19 @@ async def auth_callback(request: Request, code: str = "", state: str = "") -> Re
     if not code or state != request.session.get("oauth_state"):
         return RedirectResponse("/?error=oauth_state", status_code=303)
 
-    token_payload = await exchange_code_for_token(code, settings)
-    access_token = token_payload["access_token"]
-    user = await discord_request(f"{DISCORD_API_BASE}/users/@me", access_token=access_token)
-    guilds = await discord_request(f"{DISCORD_API_BASE}/users/@me/guilds", access_token=access_token)
+    try:
+        token_payload = await exchange_code_for_token(code, settings)
+        access_token = token_payload["access_token"]
+        user = await discord_request(f"{DISCORD_API_BASE}/users/@me", access_token=access_token)
+        guilds = await discord_request(f"{DISCORD_API_BASE}/users/@me/guilds", access_token=access_token)
+    except httpx.HTTPStatusError as exc:
+        request.session.pop("oauth_state", None)
+        reason = summarize_http_error(exc)
+        return RedirectResponse(f"/?error=oauth_token&reason={reason}", status_code=303)
+    except Exception:
+        request.session.pop("oauth_state", None)
+        return RedirectResponse("/?error=oauth_failed", status_code=303)
+
     request.session["user"] = user
     request.session["guilds"] = [guild for guild in guilds if is_manageable_guild(guild)]
     request.session.pop("oauth_state", None)

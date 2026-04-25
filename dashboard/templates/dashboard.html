@@ -85,7 +85,9 @@
         {% for guild in guilds %}
         <a class="card guild-card" href="/dashboard/{{ guild.id }}" data-guild-name="{{ guild.name|lower }}" data-guild-id="{{ guild.id }}">
             <div class="guild-card-header">
-                <div class="guild-mark">{{ guild.name[:2]|upper }}</div>
+                <div class="guild-mark image-mark">
+                    <img src="{{ guild.icon_url }}" alt="{{ guild.name }} icon">
+                </div>
                 <div>
                     <h2>{{ guild.name }}</h2>
                     <p class="guild-id">Guild ID: {{ guild.id }}</p>
