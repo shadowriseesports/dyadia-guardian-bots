@@ -6,83 +6,148 @@
     <div class="card status-banner">
         <div class="split-row">
             <div>
-                <span class="section-kicker">✅ Save Successful</span>
+                <span class="section-kicker">Save Successful</span>
                 <h2>Settings updated for {{ guild.name }}</h2>
-                <p>Your latest configuration is saved in PostgreSQL and ready for the bot refresh loop.</p>
+                <p>Your latest configuration is stored in PostgreSQL and ready for the bot refresh loop.</p>
             </div>
-            <span class="pill success">Live Sync Ready</span>
+            <span class="pill success">Live sync ready</span>
         </div>
     </div>
     {% elif message == "reset" %}
     <div class="card status-banner">
         <div class="split-row">
             <div>
-                <span class="section-kicker">♻️ Reset Complete</span>
+                <span class="section-kicker">Reset Complete</span>
                 <h2>Guild settings restored to defaults</h2>
-                <p>The dashboard saved a clean default profile for this guild.</p>
+                <p>The dashboard saved a fresh baseline profile for this guild.</p>
             </div>
-            <span class="pill success">Defaults Restored</span>
+            <span class="pill success">Defaults restored</span>
         </div>
     </div>
     {% elif message == "action_queued" %}
     <div class="card status-banner">
         <div class="split-row">
             <div>
-                <span class="section-kicker">📨 Action Queued</span>
+                <span class="section-kicker">Action Queued</span>
                 <h2>Bot task sent successfully</h2>
                 <p>The bot will pick up the queued dashboard action from PostgreSQL shortly.</p>
             </div>
-            <span class="pill success">Queue Active</span>
+            <span class="pill success">Queue active</span>
         </div>
     </div>
     {% elif message == "action_needs_channel" %}
-    <div class="card status-banner">
+    <div class="card status-banner warn-banner">
         <div class="split-row">
             <div>
-                <span class="section-kicker">⚠️ Channel Required</span>
+                <span class="section-kicker">Channel Required</span>
                 <h2>Pick a target channel first</h2>
                 <p>Panel-posting actions need a text channel ID so the bot knows where to send them.</p>
             </div>
-            <span class="pill">Needs Channel</span>
+            <span class="pill">Needs channel</span>
+        </div>
+    </div>
+    {% elif message == "invalid_action" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Action Rejected</span>
+                <h2>That action type is not available</h2>
+                <p>Choose a supported dashboard action and try again.</p>
+            </div>
+            <span class="pill">Invalid action</span>
         </div>
     </div>
     {% endif %}
 
-    <div class="section-header">
-        <div>
-            <a class="link-button" href="/dashboard">← Back to Servers</a>
-            <div class="title-row" style="margin-top: 1rem;">
-                <div class="guild-mark">🏰</div>
+    <div class="control-hero card">
+        <div class="control-hero-main">
+            <a class="link-button" href="/dashboard">Back to Servers</a>
+            <div class="title-row">
+                <div class="guild-mark">{{ guild.name[:2]|upper }}</div>
                 <div>
-                    <span class="section-kicker">🎛️ Guild Control Panel</span>
+                    <span class="section-kicker">Guild Control Panel</span>
                     <h1>{{ guild.name }}</h1>
                     <p>Guild ID: {{ guild.id }}</p>
                 </div>
             </div>
+            <p class="hero-description">This workspace unifies server setup, growth systems, moderation routing, content copy, and operational controls into one cleaner production dashboard.</p>
+            <div class="chip-row">
+                <span class="chip">Readiness {{ dashboard_summary.readiness_score }}%</span>
+                <span class="chip">{{ dashboard_summary.enabled_toggles }} systems enabled</span>
+                <span class="chip">{{ audit_entries|length }} audit entries</span>
+                <span class="chip">{{ action_history|length }} recent actions</span>
+            </div>
         </div>
-        <div class="chip-row">
-            <span class="chip">🛠️ Configurable</span>
-            <span class="chip">🗄️ PostgreSQL-backed</span>
+        <div class="control-hero-side">
+            {% for stat in dashboard_summary.stats %}
+            <div class="hero-stat">
+                <strong>{{ stat.value }}</strong>
+                <p>{{ stat.label }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="section-header">
+        <div>
+            <span class="section-kicker">Operational Summary</span>
+            <h2>At-a-glance control</h2>
+            <p>See configuration health, linked resources, and the most recent changes before editing anything.</p>
+        </div>
+        <div class="jump-nav">
+            {% for item in section_nav %}
+            <a class="jump-link" href="#{{ item.id }}">{{ item.label }}</a>
+            {% endfor %}
         </div>
     </div>
 
-    <div class="metric-grid">
-        <div class="metric">
-            <strong>📡 {{ text_channels|length }}</strong>
-            <p>Text channels available for suggestions.</p>
+    <div class="overview-grid">
+        <div class="card stack">
+            <div>
+                <span class="section-kicker">Readiness</span>
+                <h3>Launch checklist</h3>
+            </div>
+            <div class="progress-row">
+                <div class="progress-ring">
+                    <strong>{{ dashboard_summary.readiness_score }}%</strong>
+                    <span>Configured</span>
+                </div>
+                <div>
+                    <p>{{ dashboard_summary.completed_items }} of {{ dashboard_summary.progress_items|length }} operational checkpoints are ready.</p>
+                    <p class="hint">Finish the remaining items below to make this guild safer and easier to run.</p>
+                </div>
+            </div>
         </div>
-        <div class="metric">
-            <strong>🧵 {{ forum_channels|length }}</strong>
-            <p>Forum channels available for modmail routing.</p>
+        <div class="card stack">
+            <div>
+                <span class="section-kicker">Recent Change</span>
+                <h3>Latest save activity</h3>
+            </div>
+            <p>{{ dashboard_summary.latest_change_summary }}</p>
+            <p class="hint">{{ dashboard_summary.latest_change_time }}</p>
         </div>
-        <div class="metric">
-            <strong>🎭 {{ roles|length }}</strong>
-            <p>Roles available for access and verification setup.</p>
+        <div class="card stack">
+            <div>
+                <span class="section-kicker">Bot Queue</span>
+                <h3>Latest action state</h3>
+            </div>
+            <p>{{ dashboard_summary.last_action_summary }}</p>
+            <p class="hint">{{ dashboard_summary.last_action_time }}</p>
         </div>
-        <div class="metric">
-            <strong>📝 {{ audit_entries|length }}</strong>
-            <p>Recent dashboard saves recorded for this guild.</p>
+    </div>
+
+    <div class="system-grid">
+        {% for system in dashboard_summary.system_cards %}
+        <div class="card system-card">
+            <div class="system-card-top">
+                <strong>{{ system.title }}</strong>
+                <span class="state-pill {{ system.tone }}">{{ system.status }}</span>
+            </div>
+            <p>{{ system.detail }}</p>
         </div>
+        {% endfor %}
     </div>
 </section>
 
@@ -90,277 +155,288 @@
     <div class="settings-layout">
         <div class="settings-main">
             <form method="post" action="/dashboard/{{ guild.id }}/save" class="settings-form">
-                <section class="card settings-section">
+                <section class="card settings-section" id="feature-toggles">
                     <div class="section-title">
-                        <div class="section-icon">🎚️</div>
+                        <div class="section-icon">FX</div>
                         <div>
                             <h2>Feature Toggles</h2>
-                            <p>Turn key bot systems on or off without touching code or environment variables.</p>
+                            <p>Turn major bot systems on or off without touching code or environment variables.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.checkbox_field("mod_log_enabled", "Mod Log Enabled", guild_settings.mod_log_enabled, "📘", "Disable if you temporarily want moderation actions to stop posting log embeds.") }}
-                        {{ forms.checkbox_field("server_log_enabled", "Server Log Enabled", guild_settings.server_log_enabled, "🛰️", "Controls join, leave, and server-event logging.") }}
-                        {{ forms.checkbox_field("invite_log_enabled", "Invite Log Enabled", guild_settings.invite_log_enabled, "📨", "Controls invite tracking log output.") }}
-                        {{ forms.checkbox_field("verification_log_enabled", "Verification Log Enabled", guild_settings.verification_log_enabled, "✅", "Controls verification result logging.") }}
-                        {{ forms.checkbox_field("welcome_enabled", "Welcome Messages Enabled", guild_settings.welcome_enabled, "🎉", "Disables automatic welcome posts even if a channel is set.") }}
-                        {{ forms.checkbox_field("instagram_enabled", "Instagram Notifications Enabled", guild_settings.instagram_enabled, "📸", "Disable feed posting while keeping the feed URL saved.") }}
-                        {{ forms.checkbox_field("leveling_enabled", "Leveling Enabled", guild_settings.leveling_enabled, "📈", "Stops XP gain and leveling progression for this guild.") }}
-                        {{ forms.checkbox_field("anti_raid_enabled", "Anti-Raid Enabled", guild_settings.anti_raid_enabled, "🚨", "Controls whether automatic raid detection is active.") }}
+                        {{ forms.checkbox_field("mod_log_enabled", "Mod Log Enabled", guild_settings.mod_log_enabled, "ML", "Disable if you temporarily want moderation actions to stop posting log embeds.") }}
+                        {{ forms.checkbox_field("server_log_enabled", "Server Log Enabled", guild_settings.server_log_enabled, "SL", "Controls join, leave, and server-event logging.") }}
+                        {{ forms.checkbox_field("invite_log_enabled", "Invite Log Enabled", guild_settings.invite_log_enabled, "IL", "Controls invite tracking log output.") }}
+                        {{ forms.checkbox_field("verification_log_enabled", "Verification Log Enabled", guild_settings.verification_log_enabled, "VL", "Controls verification result logging.") }}
+                        {{ forms.checkbox_field("welcome_enabled", "Welcome Messages Enabled", guild_settings.welcome_enabled, "WM", "Disables automatic welcome posts even if a channel is set.") }}
+                        {{ forms.checkbox_field("instagram_enabled", "Instagram Notifications Enabled", guild_settings.instagram_enabled, "IG", "Disable feed posting while keeping the feed URL saved.") }}
+                        {{ forms.checkbox_field("leveling_enabled", "Leveling Enabled", guild_settings.leveling_enabled, "LV", "Stops XP gain and leveling progression for this guild.") }}
+                        {{ forms.checkbox_field("anti_raid_enabled", "Anti-Raid Enabled", guild_settings.anti_raid_enabled, "AR", "Controls whether automatic raid detection is active.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="core-channels">
                     <div class="section-title">
-                        <div class="section-icon">📡</div>
+                        <div class="section-icon">CH</div>
                         <div>
                             <h2>Core Channels</h2>
-                            <p>Choose where moderation, welcome flows, logs, and alerts should appear.</p>
+                            <p>Choose where moderation, welcome flows, logs, alerts, and support workflows should appear.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.channel_field("modmail_forum_id", "Modmail Forum ID", guild_settings.modmail_forum_id, forum_channels, "🧵", "Forum channel where private support threads should open.") }}
-                        {{ forms.channel_field("mod_log_channel_id", "Mod Log Channel ID", guild_settings.mod_log_channel_id, text_channels, "📘", "Main moderation log for warns, bans, mutes, and staff actions.") }}
-                        {{ forms.channel_field("server_log_channel_id", "Server Log Channel ID", guild_settings.server_log_channel_id, text_channels, "🛰️", "Server activity events like joins, leaves, and structure changes.") }}
-                        {{ forms.channel_field("invite_log_channel_id", "Invite Log Channel ID", guild_settings.invite_log_channel_id, text_channels, "📨", "Invite tracking and join attribution messages.") }}
-                        {{ forms.channel_field("verification_log_channel_id", "Verification Log Channel ID", guild_settings.verification_log_channel_id, text_channels, "✅", "Verification confirmations and access tracking.") }}
-                        {{ forms.channel_field("welcome_channel_id", "Welcome Channel ID", guild_settings.welcome_channel_id, text_channels, "🎉", "Where the welcome embed should be posted.") }}
-                        {{ forms.channel_field("staff_application_channel_id", "Staff Application Channel ID", guild_settings.staff_application_channel_id, text_channels, "🧾", "Review channel for incoming staff applications.") }}
-                        {{ forms.channel_field("level_up_channel_id", "Level Up Channel ID", guild_settings.level_up_channel_id, text_channels, "📈", "Channel for level-up announcements and rank milestones.") }}
-                        {{ forms.channel_field("instagram_notification_channel_id", "Instagram Notification Channel ID", guild_settings.instagram_notification_channel_id, text_channels, "📸", "Destination for Instagram feed notifications.") }}
+                        {{ forms.channel_field("modmail_forum_id", "Modmail Forum ID", guild_settings.modmail_forum_id, forum_channels, "MF", "Forum channel where private support threads should open.") }}
+                        {{ forms.channel_field("mod_log_channel_id", "Mod Log Channel ID", guild_settings.mod_log_channel_id, text_channels, "ML", "Main moderation log for warns, bans, mutes, and staff actions.") }}
+                        {{ forms.channel_field("server_log_channel_id", "Server Log Channel ID", guild_settings.server_log_channel_id, text_channels, "SL", "Server activity events like joins, leaves, and structure changes.") }}
+                        {{ forms.channel_field("invite_log_channel_id", "Invite Log Channel ID", guild_settings.invite_log_channel_id, text_channels, "IL", "Invite tracking and join attribution messages.") }}
+                        {{ forms.channel_field("verification_log_channel_id", "Verification Log Channel ID", guild_settings.verification_log_channel_id, text_channels, "VL", "Verification confirmations and access tracking.") }}
+                        {{ forms.channel_field("welcome_channel_id", "Welcome Channel ID", guild_settings.welcome_channel_id, text_channels, "WC", "Where the welcome embed should be posted.") }}
+                        {{ forms.channel_field("staff_application_channel_id", "Staff Application Channel ID", guild_settings.staff_application_channel_id, text_channels, "SA", "Review channel for incoming staff applications.") }}
+                        {{ forms.channel_field("level_up_channel_id", "Level Up Channel ID", guild_settings.level_up_channel_id, text_channels, "LU", "Channel for level-up announcements and rank milestones.") }}
+                        {{ forms.channel_field("instagram_notification_channel_id", "Instagram Notification Channel ID", guild_settings.instagram_notification_channel_id, text_channels, "IG", "Destination for Instagram feed notifications.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="roles-access">
                     <div class="section-title">
-                        <div class="section-icon">🎭</div>
+                        <div class="section-icon">RL</div>
                         <div>
                             <h2>Roles And Access</h2>
                             <p>Map moderation power, admin authority, and verified member access to the right roles.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.role_field("moderator_role_id", "Moderator Role ID", guild_settings.moderator_role_id, roles, "🛡️", "Members with this role can use staff tools and moderation controls.") }}
-                        {{ forms.role_field("admin_role_id", "Admin Role ID", guild_settings.admin_role_id, roles, "👑", "High-trust role for elevated staff permissions.") }}
-                        {{ forms.role_field("verified_role_id", "Verified Role ID", guild_settings.verified_role_id, roles, "🔓", "Granted when users complete your verification flow.") }}
+                        {{ forms.role_field("moderator_role_id", "Moderator Role ID", guild_settings.moderator_role_id, roles, "MR", "Members with this role can use staff tools and moderation controls.") }}
+                        {{ forms.role_field("admin_role_id", "Admin Role ID", guild_settings.admin_role_id, roles, "AD", "High-trust role for elevated staff permissions.") }}
+                        {{ forms.role_field("verified_role_id", "Verified Role ID", guild_settings.verified_role_id, roles, "VR", "Granted when users complete your verification flow.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="branding">
                     <div class="section-title">
-                        <div class="section-icon">🎨</div>
+                        <div class="section-icon">BR</div>
                         <div>
                             <h2>Branding And Presence</h2>
                             <p>Shape how your bot looks and speaks inside the server experience.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.text_field("server_name", "Server Name", guild_settings.server_name, "🏷️", "Displayed in welcome copy and server-facing bot messaging.") }}
-                        {{ forms.text_field("bot_status_text", "Bot Status Text", guild_settings.bot_status_text, "💬", "Custom presence text shown in the bot status line.") }}
-                        {{ forms.text_field("welcome_banner_url", "Welcome Banner URL", guild_settings.welcome_banner_url, "🖼️", "Optional image URL used inside the welcome embed.") }}
+                        {{ forms.text_field("server_name", "Server Name", guild_settings.server_name, "SN", "Displayed in welcome copy and server-facing bot messaging.") }}
+                        {{ forms.text_field("bot_status_text", "Bot Status Text", guild_settings.bot_status_text, "BS", "Custom presence text shown in the bot status line.") }}
+                        {{ forms.text_field("welcome_banner_url", "Welcome Banner URL", guild_settings.welcome_banner_url, "WB", "Optional image URL used inside the welcome embed.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="message-copy">
                     <div class="section-title">
-                        <div class="section-icon">📝</div>
+                        <div class="section-icon">CP</div>
                         <div>
                             <h2>Panel And Message Copy</h2>
                             <p>Customize the titles and descriptions used in public panels, DMs, and welcome embeds.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.text_field("welcome_title", "Welcome Title", guild_settings.welcome_title, "🎉", "Supports placeholders like {member} and {server}.") }}
-                        {{ forms.textarea_field("welcome_description", "Welcome Description", guild_settings.welcome_description, "📬", "Supports {member}, {server}, {verified_role}, {verify_channel}, {server_info_channel}, and {intro_channel}.") }}
-                        {{ forms.text_field("modmail_intro_title", "Modmail Intro Title", guild_settings.modmail_intro_title, "💬", "Shown in the DM intro when users open modmail.") }}
-                        {{ forms.textarea_field("modmail_intro_description", "Modmail Intro Description", guild_settings.modmail_intro_description, "📨", "Use {server} in the text if you want the guild name inserted.") }}
-                        {{ forms.text_field("staff_panel_title", "Staff Panel Title", guild_settings.staff_panel_title, "🧾", "Main heading for the staff application panel.") }}
-                        {{ forms.textarea_field("staff_panel_description", "Staff Panel Description", guild_settings.staff_panel_description, "🪪", "Supports {server} if you want the guild name inside the panel copy.") }}
-                        {{ forms.text_field("verification_title", "Verification Title", guild_settings.verification_title, "✅", "Main heading for the verification panel.") }}
-                        {{ forms.textarea_field("verification_description", "Verification Description", guild_settings.verification_description, "🔓", "Supports {verified_role} and {server}.") }}
-                        {{ forms.text_field("level_panel_title", "Level Panel Title", guild_settings.level_panel_title, "📈", "Headline used when posting the leveling panel.") }}
-                        {{ forms.textarea_field("level_panel_description", "Level Panel Description", guild_settings.level_panel_description, "⭐", "Introductory copy for the leveling information panel.") }}
+                        {{ forms.text_field("welcome_title", "Welcome Title", guild_settings.welcome_title, "WT", "Supports placeholders like {member} and {server}.") }}
+                        {{ forms.textarea_field("welcome_description", "Welcome Description", guild_settings.welcome_description, "WD", "Supports {member}, {server}, {verified_role}, {verify_channel}, {server_info_channel}, and {intro_channel}.") }}
+                        {{ forms.text_field("modmail_intro_title", "Modmail Intro Title", guild_settings.modmail_intro_title, "MT", "Shown in the DM intro when users open modmail.") }}
+                        {{ forms.textarea_field("modmail_intro_description", "Modmail Intro Description", guild_settings.modmail_intro_description, "MD", "Use {server} in the text if you want the guild name inserted.") }}
+                        {{ forms.text_field("staff_panel_title", "Staff Panel Title", guild_settings.staff_panel_title, "ST", "Main heading for the staff application panel.") }}
+                        {{ forms.textarea_field("staff_panel_description", "Staff Panel Description", guild_settings.staff_panel_description, "SD", "Supports {server} if you want the guild name inside the panel copy.") }}
+                        {{ forms.text_field("verification_title", "Verification Title", guild_settings.verification_title, "VT", "Main heading for the verification panel.") }}
+                        {{ forms.textarea_field("verification_description", "Verification Description", guild_settings.verification_description, "VD", "Supports {verified_role} and {server}.") }}
+                        {{ forms.text_field("level_panel_title", "Level Panel Title", guild_settings.level_panel_title, "LT", "Headline used when posting the leveling panel.") }}
+                        {{ forms.textarea_field("level_panel_description", "Level Panel Description", guild_settings.level_panel_description, "LD", "Introductory copy for the leveling information panel.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="instagram-settings">
                     <div class="section-title">
-                        <div class="section-icon">📸</div>
+                        <div class="section-icon">IG</div>
                         <div>
                             <h2>Instagram</h2>
                             <p>Keep your community updated with live post and reel notifications.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.text_field("instagram_feed_url", "Instagram Feed URL", guild_settings.instagram_feed_url, "🔗", "RSS or Atom feed source used for Instagram polling.") }}
-                        {{ forms.text_field("instagram_profile_name", "Instagram Profile Name", guild_settings.instagram_profile_name, "📛", "Display label used in Instagram embeds and status messages.") }}
-                        {{ forms.number_field("instagram_poll_minutes", "Instagram Poll Minutes", guild_settings.instagram_poll_minutes, "⏱️", "How often the bot should check for new feed entries.") }}
+                        {{ forms.text_field("instagram_feed_url", "Instagram Feed URL", guild_settings.instagram_feed_url, "FU", "RSS or Atom feed source used for Instagram polling.") }}
+                        {{ forms.text_field("instagram_profile_name", "Instagram Profile Name", guild_settings.instagram_profile_name, "PN", "Display label used in Instagram embeds and status messages.") }}
+                        {{ forms.number_field("instagram_poll_minutes", "Instagram Poll Minutes", guild_settings.instagram_poll_minutes, "PM", "How often the bot should check for new feed entries.") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="leveling">
                     <div class="section-title">
-                        <div class="section-icon">📈</div>
+                        <div class="section-icon">LV</div>
                         <div>
                             <h2>Leveling And Auto-Reactions</h2>
                             <p>Control progression pacing and channel-specific emoji reactions from the website.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.number_field("level_xp_increment", "Level XP Increment", guild_settings.level_xp_increment, "⚡", "Base XP step used to calculate each next level requirement.") }}
-                        {{ forms.textarea_field("auto_react_rules", "Auto-Reaction Rules", guild_settings.auto_react_rules, "😀", "One line per rule. Example: 123456789012345678 = 🔥, ✅") }}
+                        {{ forms.number_field("level_xp_increment", "Level XP Increment", guild_settings.level_xp_increment, "XP", "Base XP step used to calculate each next level requirement.") }}
+                        {{ forms.textarea_field("auto_react_rules", "Auto-Reaction Rules", guild_settings.auto_react_rules, "AR", "One line per rule. Example: 123456789012345678 = fire, check") }}
                     </div>
                 </section>
 
-                <section class="card settings-section">
+                <section class="card settings-section" id="anti-raid">
                     <div class="section-title">
-                        <div class="section-icon">🚨</div>
+                        <div class="section-icon">SR</div>
                         <div>
                             <h2>Anti-Raid</h2>
                             <p>Configure detection rules and automatic reaction windows for suspicious join spikes.</p>
                         </div>
                     </div>
                     <div class="field-grid">
-                        {{ forms.number_field("anti_raid_join_threshold", "Join Threshold", guild_settings.anti_raid_join_threshold, "🚪", "How many joins inside the time window should trigger protection.") }}
-                        {{ forms.number_field("anti_raid_window_seconds", "Window Seconds", guild_settings.anti_raid_window_seconds, "⏳", "Detection window used to count suspicious joins.") }}
-                        {{ forms.number_field("anti_raid_lockdown_minutes", "Lockdown Minutes", guild_settings.anti_raid_lockdown_minutes, "🔒", "How long the server should stay in lockdown mode after a trigger.") }}
-                        {{ forms.number_field("anti_raid_account_age_minutes", "Account Age Minutes", guild_settings.anti_raid_account_age_minutes, "🕵️", "Accounts newer than this are treated as more suspicious during raids.") }}
-                        {{ forms.number_field("anti_raid_timeout_minutes", "Timeout Minutes", guild_settings.anti_raid_timeout_minutes, "⛔", "Automatic timeout duration applied by anti-raid enforcement.") }}
+                        {{ forms.number_field("anti_raid_join_threshold", "Join Threshold", guild_settings.anti_raid_join_threshold, "JT", "How many joins inside the time window should trigger protection.") }}
+                        {{ forms.number_field("anti_raid_window_seconds", "Window Seconds", guild_settings.anti_raid_window_seconds, "WS", "Detection window used to count suspicious joins.") }}
+                        {{ forms.number_field("anti_raid_lockdown_minutes", "Lockdown Minutes", guild_settings.anti_raid_lockdown_minutes, "LM", "How long the server should stay in lockdown mode after a trigger.") }}
+                        {{ forms.number_field("anti_raid_account_age_minutes", "Account Age Minutes", guild_settings.anti_raid_account_age_minutes, "AM", "Accounts newer than this are treated as more suspicious during raids.") }}
+                        {{ forms.number_field("anti_raid_timeout_minutes", "Timeout Minutes", guild_settings.anti_raid_timeout_minutes, "TM", "Automatic timeout duration applied by anti-raid enforcement.") }}
                     </div>
                 </section>
 
                 <div class="actions">
                     <a class="ghost-button" href="/dashboard">Cancel</a>
-                    <button class="primary-button" type="submit">💾 Save Settings</button>
+                    <button class="primary-button" type="submit">Save Settings</button>
                 </div>
             </form>
         </div>
 
         <aside class="settings-side">
-            <div class="card sticky-card stack">
-                    <div>
-                        <span class="section-kicker">🧭 Setup Guide</span>
-                        <h2>Before you save</h2>
-                    </div>
-                    <ul class="list-clean">
-                        <li>Use channel and role IDs that belong to this guild only.</li>
-                        <li>Leave optional values as `0` or blank if you are not using them yet.</li>
-                        <li>Add `DISCORD_TOKEN` in Railway if you want smarter channel and role suggestions.</li>
-                        <li>Auto-reaction rules support plain channel IDs or channel mentions.</li>
-                        <li>The bot refreshes dashboard settings from PostgreSQL automatically.</li>
-                    </ul>
+            <div class="card stack">
+                <div>
+                    <span class="section-kicker">Setup Guide</span>
+                    <h2>Before you save</h2>
+                </div>
+                <ul class="checklist-clean">
+                    {% for item in dashboard_summary.progress_items %}
+                    <li class="{{ 'done' if item.done else 'todo' }}">
+                        <strong>{{ item.title }}</strong>
+                        <p>{{ item.detail }}</p>
+                    </li>
+                    {% endfor %}
+                </ul>
             </div>
 
             <div class="card stack">
-                    <div>
-                        <span class="section-kicker">👀 Preview Cards</span>
-                        <h2>How your embeds will feel</h2>
-                        <p>These are quick content previews based on the settings you currently have saved.</p>
+                <div>
+                    <span class="section-kicker">Linked Resources</span>
+                    <h2>Current routing snapshot</h2>
+                    <p>These are the core destinations and roles that shape the guild experience right now.</p>
+                </div>
+                <div class="info-list">
+                    {% for item in dashboard_summary.resource_highlights %}
+                    <div class="info-row">
+                        <span>{{ item.label }}</span>
+                        <strong>{{ item.value }}</strong>
                     </div>
-                    <div class="preview-list">
-                        {% for preview in preview_cards %}
-                        <div class="preview-card">
-                            <div class="audit-header">
-                                <div class="audit-icon">{{ preview.icon }}</div>
-                                <div>
-                                    <strong>{{ preview.title }}</strong>
-                                    <p>{{ preview.description }}</p>
-                                </div>
-                            </div>
-                            <p class="audit-time">Preview: {{ preview.tag }}</p>
-                        </div>
-                        {% endfor %}
-                    </div>
+                    {% endfor %}
+                </div>
             </div>
 
             <div class="card stack">
-                    <div>
-                        <span class="section-kicker">🤖 Bot Controls</span>
-                        <h2>Queue a bot action</h2>
-                        <p>Send a safe action to the bot through PostgreSQL without opening Discord slash commands.</p>
+                <div>
+                    <span class="section-kicker">Preview Cards</span>
+                    <h2>How your embeds will feel</h2>
+                    <p>Quick content previews based on the settings currently saved.</p>
+                </div>
+                <div class="preview-list">
+                    {% for preview in preview_cards %}
+                    <div class="preview-card">
+                        <div class="preview-label">{{ preview.tag }}</div>
+                        <strong>{{ preview.title }}</strong>
+                        <p>{{ preview.description }}</p>
                     </div>
-                    <form method="post" action="/dashboard/{{ guild.id }}/actions" class="stack">
-                        <label class="field">
-                            <span class="field-label"><span class="field-icon">⚡</span>Action Type</span>
-                            <span class="field-copy">Posting panels needs a target channel ID. Refresh and anti-raid actions do not.</span>
-                            <select name="action_type">
-                                {% for option in action_options %}
-                                <option value="{{ option.value }}">{{ option.label }}</option>
-                                {% endfor %}
-                            </select>
-                        </label>
-                        <label class="field">
-                            <span class="field-label"><span class="field-icon">#️⃣</span>Target Channel ID</span>
-                            <span class="field-copy">Used for panel-posting actions. You can leave this blank for non-channel actions.</span>
-                            <input type="text" name="action_channel_id" placeholder="123456789012345678">
-                        </label>
-                        <button class="primary-button" type="submit">📨 Queue Bot Action</button>
-                    </form>
+                    {% endfor %}
+                </div>
             </div>
 
             <div class="card stack">
-                    <div>
-                        <span class="section-kicker">🕘 Action History</span>
-                        <h2>Recent bot actions</h2>
-                        <p>Track queued actions and whether the bot completed them successfully.</p>
-                    </div>
-                    <div class="audit-list">
-                        {% for entry in action_history %}
-                        <div class="audit-entry">
-                            <div class="audit-header">
-                                <div class="audit-icon">⚙️</div>
-                                <div>
-                                    <strong>{{ action_label(entry.action_type) }}</strong>
-                                    <p>Status: {{ entry.status|title }}{% if entry.result_message %} | {{ entry.result_message }}{% endif %}</p>
-                                </div>
-                            </div>
-                            <p class="audit-time">Requested by: {{ entry.requested_by or "Unknown" }} | {{ entry.created_at }}</p>
-                        </div>
-                        {% else %}
-                        <div class="audit-entry">
-                            <strong>No bot actions queued yet</strong>
-                            <p>Use the controls above to post panels, refresh settings, or run operational actions.</p>
-                        </div>
-                        {% endfor %}
-                    </div>
+                <div>
+                    <span class="section-kicker">Bot Controls</span>
+                    <h2>Queue a bot action</h2>
+                    <p>Send a safe operational action through PostgreSQL without opening Discord slash commands.</p>
+                </div>
+                <form method="post" action="/dashboard/{{ guild.id }}/actions" class="stack">
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">AT</span>Action Type</span>
+                        <span class="field-copy">Posting panels needs a target channel ID. Refresh and anti-raid actions do not.</span>
+                        <select name="action_type">
+                            {% for option in action_options %}
+                            <option value="{{ option.value }}">{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">ID</span>Target Channel ID</span>
+                        <span class="field-copy">Used for panel-posting actions. You can leave this blank for non-channel actions.</span>
+                        <input type="text" name="action_channel_id" placeholder="123456789012345678">
+                    </label>
+                    <button class="primary-button" type="submit">Queue Bot Action</button>
+                </form>
             </div>
 
             <div class="card stack">
-                    <div>
-                        <span class="section-kicker">📝 Audit Trail</span>
-                        <h2>Recent Dashboard Activity</h2>
-                        <p>See the latest saved changes for this guild.</p>
-                    </div>
-                    <div class="audit-list">
-                        {% for entry in audit_entries %}
-                        <div class="audit-entry">
-                            <div class="audit-header">
-                                <div class="audit-icon">🧾</div>
-                                <div>
-                                    <strong>User ID: {{ entry.updated_by or "Unknown" }}</strong>
-                                    <p>{{ ", ".join(entry.changed_keys) if entry.changed_keys else "No field changes" }}</p>
-                                </div>
-                            </div>
-                            <p class="audit-time">⏰ {{ entry.created_at }}</p>
+                <div>
+                    <span class="section-kicker">Action History</span>
+                    <h2>Recent bot actions</h2>
+                    <p>Track queued actions and whether the bot completed them successfully.</p>
+                </div>
+                <div class="audit-list">
+                    {% for entry in action_history %}
+                    <div class="audit-entry">
+                        <div class="system-card-top">
+                            <strong>{{ entry.label }}</strong>
+                            <span class="state-pill {{ entry.status_tone }}">{{ entry.status|title }}</span>
                         </div>
-                        {% else %}
-                        <div class="audit-entry">
-                            <strong>No dashboard changes yet</strong>
-                            <p>Once someone saves this guild from the dashboard, the activity history will show here.</p>
-                        </div>
-                        {% endfor %}
+                        <p>{% if entry.result_message %}{{ entry.result_message }}{% else %}No result message recorded yet.{% endif %}</p>
+                        <p class="audit-time">Requested by {{ entry.requested_by or "Unknown" }} on {{ entry.created_label }}</p>
                     </div>
+                    {% else %}
+                    <div class="audit-entry">
+                        <strong>No bot actions queued yet</strong>
+                        <p>Use the controls above to post panels, refresh settings, or run operational actions.</p>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
 
             <div class="card stack">
-                    <div>
-                        <span class="section-kicker">🧹 Reset</span>
-                        <h2>Restore defaults</h2>
-                        <p>If your configuration gets messy, you can reset this guild back to the built-in defaults.</p>
+                <div>
+                    <span class="section-kicker">Audit Trail</span>
+                    <h2>Recent dashboard activity</h2>
+                    <p>See the latest saved changes for this guild.</p>
+                </div>
+                <div class="audit-list">
+                    {% for entry in audit_entries %}
+                    <div class="audit-entry">
+                        <strong>User ID: {{ entry.updated_by or "Unknown" }}</strong>
+                        <p>
+                            {% if entry.changed_labels %}
+                            {{ ", ".join(entry.changed_labels[:4]) }}{% if entry.changed_labels|length > 4 %} and {{ entry.changed_labels|length - 4 }} more{% endif %}
+                            {% else %}
+                            No field changes
+                            {% endif %}
+                        </p>
+                        <p class="audit-time">{{ entry.created_label }}</p>
                     </div>
-                    <form method="post" action="/dashboard/{{ guild.id }}/reset">
-                        <button class="ghost-button" type="submit">♻️ Reset Guild Settings</button>
-                    </form>
+                    {% else %}
+                    <div class="audit-entry">
+                        <strong>No dashboard changes yet</strong>
+                        <p>Once someone saves this guild from the dashboard, the activity history will show here.</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="card stack">
+                <div>
+                    <span class="section-kicker">Reset</span>
+                    <h2>Restore defaults</h2>
+                    <p>If your configuration gets messy, reset this guild back to the built-in defaults.</p>
+                </div>
+                <form method="post" action="/dashboard/{{ guild.id }}/reset">
+                    <button class="ghost-button" type="submit">Reset Guild Settings</button>
+                </form>
             </div>
         </aside>
     </div>

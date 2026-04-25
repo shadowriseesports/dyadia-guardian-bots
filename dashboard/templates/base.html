@@ -7,27 +7,33 @@
     <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-    <header class="topbar">
-        <div class="brand-wrap">
-            <div class="brand-mark">🛡️</div>
-            <div>
-                <span class="eyebrow">Bot Control Center</span>
-                <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
-                <p class="subtitle">Professional control panel for moderation, welcome flows, leveling, logs, anti-raid, and brand settings.</p>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="brand-wrap">
+                <a class="brand-mark" href="/dashboard" aria-label="Dashboard home">DG</a>
+                <div>
+                    <span class="eyebrow">Operations Console</span>
+                    <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
+                    <p class="subtitle">Moderation, onboarding, growth, automation, and server operations in one professional workspace.</p>
+                </div>
             </div>
-        </div>
-        <nav class="topnav">
-            {% if session_user %}
-            <span class="pill">👋 {{ session_user.username }}</span>
-            <a class="link-button" href="/dashboard">🏠 Overview</a>
-            <a class="ghost-button" href="/logout">↩ Logout</a>
-            {% else %}
-            <a class="link-button" href="/login">🔐 Login with Discord</a>
-            {% endif %}
-        </nav>
-    </header>
-    <main class="page">
-        {% block content %}{% endblock %}
-    </main>
+            <nav class="topnav">
+                {% if session_user %}
+                <span class="pill">{{ session_user.username }}</span>
+                <a class="link-button" href="/dashboard">Overview</a>
+                <a class="ghost-button" href="/logout">Logout</a>
+                {% else %}
+                <a class="link-button" href="/login">Login with Discord</a>
+                {% endif %}
+            </nav>
+        </header>
+        <main class="page">
+            {% block content %}{% endblock %}
+        </main>
+        <footer class="footer-bar">
+            <p>Dyadia Guardian Dashboard</p>
+            <p>Built for dependable community operations, safer moderation workflows, and faster guild setup.</p>
+        </footer>
+    </div>
 </body>
 </html>

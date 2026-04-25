@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
@@ -30,6 +31,46 @@ MANAGE_GUILD_PERMISSION = 0x20
 ADMINISTRATOR_PERMISSION = 0x8
 SETTINGS_FIELDS = list(GuildSettings().to_dict().keys())
 BOOLEAN_FIELDS = {key for key, value in GuildSettings().to_dict().items() if isinstance(value, bool)}
+CHANNEL_SETTING_FIELDS = {
+    "modmail_forum_id",
+    "mod_log_channel_id",
+    "staff_application_channel_id",
+    "server_log_channel_id",
+    "invite_log_channel_id",
+    "level_up_channel_id",
+    "verification_log_channel_id",
+    "welcome_channel_id",
+    "instagram_notification_channel_id",
+}
+ROLE_SETTING_FIELDS = {"moderator_role_id", "admin_role_id", "verified_role_id"}
+TEXT_SETTING_FIELDS = {
+    "welcome_banner_url",
+    "welcome_title",
+    "welcome_description",
+    "modmail_intro_title",
+    "modmail_intro_description",
+    "staff_panel_title",
+    "staff_panel_description",
+    "verification_title",
+    "verification_description",
+    "level_panel_title",
+    "level_panel_description",
+    "instagram_feed_url",
+    "instagram_profile_name",
+    "auto_react_rules",
+    "server_name",
+    "bot_status_text",
+}
+SECTION_NAV = [
+    {"id": "feature-toggles", "label": "Systems"},
+    {"id": "core-channels", "label": "Channels"},
+    {"id": "roles-access", "label": "Roles"},
+    {"id": "branding", "label": "Brand"},
+    {"id": "message-copy", "label": "Copy"},
+    {"id": "instagram-settings", "label": "Instagram"},
+    {"id": "leveling", "label": "Leveling"},
+    {"id": "anti-raid", "label": "Anti-Raid"},
+]
 
 ACTION_OPTIONS = [
     {"value": "post_staff_panel", "label": "Post Staff Panel", "needs_channel": True},
@@ -224,6 +265,268 @@ def build_preview_cards(guild: Dict[str, Any], guild_settings: GuildSettings) ->
     ]
 
 
+def format_timestamp(value: Optional[str]) -> str:
+    if not value:
+        return "Not available"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    return parsed.strftime("%b %d, %Y %I:%M %p")
+
+
+def humanize_field_name(key: str) -> str:
+    custom = {
+        "modmail_forum_id": "Modmail forum",
+        "mod_log_channel_id": "Moderation log channel",
+        "staff_application_channel_id": "Staff application channel",
+        "server_log_channel_id": "Server log channel",
+        "invite_log_channel_id": "Invite log channel",
+        "level_up_channel_id": "Level up channel",
+        "verification_log_channel_id": "Verification log channel",
+        "welcome_channel_id": "Welcome channel",
+        "instagram_notification_channel_id": "Instagram notification channel",
+        "moderator_role_id": "Moderator role",
+        "admin_role_id": "Admin role",
+        "verified_role_id": "Verified role",
+        "bot_status_text": "Bot status text",
+        "auto_react_rules": "Auto-reaction rules",
+        "level_xp_increment": "Level XP increment",
+        "instagram_poll_minutes": "Instagram poll minutes",
+        "anti_raid_join_threshold": "Join threshold",
+        "anti_raid_window_seconds": "Window seconds",
+        "anti_raid_lockdown_minutes": "Lockdown minutes",
+        "anti_raid_account_age_minutes": "Account age minutes",
+        "anti_raid_timeout_minutes": "Timeout minutes",
+    }
+    if key in custom:
+        return custom[key]
+    label = key.replace("_", " ").strip().title()
+    return label.replace(" Id", " ID").replace(" Xp ", " XP ")
+
+
+def resolve_resource_name(items: List[Dict[str, Any]], resource_id: int, fallback: str) -> str:
+    if resource_id <= 0:
+        return "Not linked"
+    for item in items:
+        try:
+            if int(item.get("id", 0)) == resource_id:
+                name = str(item.get("name") or fallback)
+                return f"{name} ({resource_id})"
+        except (TypeError, ValueError):
+            continue
+    return str(resource_id)
+
+
+def is_nonempty_setting(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value > 0
+    return bool(str(value or "").strip())
+
+
+def build_setup_checklist(guild_settings: GuildSettings) -> List[Dict[str, Any]]:
+    items = [
+        {
+            "title": "Welcome experience",
+            "done": guild_settings.welcome_enabled and guild_settings.welcome_channel_id > 0,
+            "detail": "Enable welcome messages and set a welcome channel.",
+        },
+        {
+            "title": "Moderation routing",
+            "done": guild_settings.mod_log_enabled and guild_settings.mod_log_channel_id > 0,
+            "detail": "Point moderation actions to a dedicated log channel.",
+        },
+        {
+            "title": "Verification flow",
+            "done": guild_settings.verified_role_id > 0 and guild_settings.verification_log_channel_id > 0,
+            "detail": "Link a verified role and a verification log destination.",
+        },
+        {
+            "title": "Support desk",
+            "done": guild_settings.modmail_forum_id > 0,
+            "detail": "Connect a forum channel for private support threads.",
+        },
+        {
+            "title": "Growth systems",
+            "done": guild_settings.leveling_enabled and guild_settings.level_up_channel_id > 0,
+            "detail": "Turn on leveling and choose where milestones should post.",
+        },
+        {
+            "title": "Anti-raid safety",
+            "done": guild_settings.anti_raid_enabled and guild_settings.anti_raid_join_threshold > 0,
+            "detail": "Keep raid protection enabled with a positive join threshold.",
+        },
+    ]
+    return items
+
+
+def build_system_cards(guild_settings: GuildSettings) -> List[Dict[str, str]]:
+    systems = [
+        (
+            "Moderation",
+            guild_settings.mod_log_enabled and guild_settings.mod_log_channel_id > 0,
+            "Logs and staff visibility are ready." if guild_settings.mod_log_enabled and guild_settings.mod_log_channel_id > 0 else "Needs a moderation log channel or enablement.",
+        ),
+        (
+            "Welcome",
+            guild_settings.welcome_enabled and guild_settings.welcome_channel_id > 0,
+            "New member onboarding is configured." if guild_settings.welcome_enabled and guild_settings.welcome_channel_id > 0 else "Connect a welcome channel to activate onboarding.",
+        ),
+        (
+            "Verification",
+            guild_settings.verified_role_id > 0 and guild_settings.verification_log_channel_id > 0,
+            "Role access and verification tracking are linked." if guild_settings.verified_role_id > 0 and guild_settings.verification_log_channel_id > 0 else "Link the verified role and verification log channel.",
+        ),
+        (
+            "Instagram",
+            guild_settings.instagram_enabled and bool(guild_settings.instagram_feed_url.strip()) and guild_settings.instagram_notification_channel_id > 0,
+            "Feed polling and delivery channel are connected." if guild_settings.instagram_enabled and bool(guild_settings.instagram_feed_url.strip()) and guild_settings.instagram_notification_channel_id > 0 else "Add a feed URL and notification channel to publish updates.",
+        ),
+        (
+            "Leveling",
+            guild_settings.leveling_enabled and guild_settings.level_up_channel_id > 0,
+            "Progression announcements are ready to post." if guild_settings.leveling_enabled and guild_settings.level_up_channel_id > 0 else "Assign a level-up channel for visible progression updates.",
+        ),
+        (
+            "Anti-Raid",
+            guild_settings.anti_raid_enabled,
+            "Automatic raid detection is active." if guild_settings.anti_raid_enabled else "Protection is currently disabled for this guild.",
+        ),
+    ]
+    cards: List[Dict[str, str]] = []
+    for title, ready, detail in systems:
+        cards.append(
+            {
+                "title": title,
+                "status": "Ready" if ready else "Needs attention",
+                "tone": "good" if ready else "warn",
+                "detail": detail,
+            }
+        )
+    return cards
+
+
+def build_resource_highlights(guild_settings: GuildSettings, resources: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    channels = resources["channels"]
+    forums = resources["forum_channels"]
+    roles = resources["roles"]
+    return [
+        {
+            "label": "Welcome channel",
+            "value": resolve_resource_name(channels, guild_settings.welcome_channel_id, "Channel"),
+        },
+        {
+            "label": "Moderation log",
+            "value": resolve_resource_name(channels, guild_settings.mod_log_channel_id, "Channel"),
+        },
+        {
+            "label": "Support forum",
+            "value": resolve_resource_name(forums, guild_settings.modmail_forum_id, "Forum"),
+        },
+        {
+            "label": "Verified role",
+            "value": resolve_resource_name(roles, guild_settings.verified_role_id, "Role"),
+        },
+    ]
+
+
+def build_dashboard_summary(
+    guild: Dict[str, Any],
+    guild_settings: GuildSettings,
+    audit_entries: List[Dict[str, Any]],
+    action_history: List[Dict[str, Any]],
+    resources: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    settings_payload = guild_settings.to_dict()
+    enabled_toggles = sum(1 for key in BOOLEAN_FIELDS if settings_payload.get(key))
+    configured_channels = sum(1 for key in CHANNEL_SETTING_FIELDS if int(settings_payload.get(key, 0) or 0) > 0)
+    configured_roles = sum(1 for key in ROLE_SETTING_FIELDS if int(settings_payload.get(key, 0) or 0) > 0)
+    configured_text = sum(1 for key in TEXT_SETTING_FIELDS if is_nonempty_setting(settings_payload.get(key)))
+    progress_items = build_setup_checklist(guild_settings)
+    completed_items = sum(1 for item in progress_items if item["done"])
+    readiness_score = int(round((completed_items / len(progress_items)) * 100)) if progress_items else 0
+
+    latest_audit = audit_entries[0] if audit_entries else None
+    latest_action = action_history[0] if action_history else None
+    latest_change_summary = "No dashboard changes saved yet."
+    if latest_audit:
+        changed = list(latest_audit.get("changed_keys") or [])
+        if changed:
+            preview = ", ".join(humanize_field_name(key) for key in changed[:3])
+            if len(changed) > 3:
+                preview += f" and {len(changed) - 3} more"
+            latest_change_summary = preview
+        else:
+            latest_change_summary = "Defaults were stored without field changes."
+
+    last_action_summary = "No bot actions queued yet."
+    if latest_action:
+        last_action_summary = f"{action_label(str(latest_action['action_type']))} is {str(latest_action['status']).title()}."
+        if latest_action.get("result_message"):
+            last_action_summary += f" {latest_action['result_message']}"
+
+    return {
+        "guild_name": str(guild.get("name", "Server")),
+        "readiness_score": readiness_score,
+        "enabled_toggles": enabled_toggles,
+        "configured_channels": configured_channels,
+        "configured_roles": configured_roles,
+        "configured_text": configured_text,
+        "progress_items": progress_items,
+        "completed_items": completed_items,
+        "latest_change_summary": latest_change_summary,
+        "latest_change_time": format_timestamp(latest_audit["created_at"]) if latest_audit else "No saves yet",
+        "last_action_summary": last_action_summary,
+        "last_action_time": format_timestamp(latest_action["created_at"]) if latest_action else "No actions yet",
+        "system_cards": build_system_cards(guild_settings),
+        "resource_highlights": build_resource_highlights(guild_settings, resources),
+        "stats": [
+            {"label": "Readiness score", "value": f"{readiness_score}%"},
+            {"label": "Systems enabled", "value": f"{enabled_toggles}/{len(BOOLEAN_FIELDS)}"},
+            {"label": "Channels linked", "value": f"{configured_channels}/{len(CHANNEL_SETTING_FIELDS)}"},
+            {"label": "Roles linked", "value": f"{configured_roles}/{len(ROLE_SETTING_FIELDS)}"},
+        ],
+    }
+
+
+def present_audit_entries(audit_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    presented: List[Dict[str, Any]] = []
+    for entry in audit_entries:
+        changed_keys = list(entry.get("changed_keys") or [])
+        changed_labels = [humanize_field_name(key) for key in changed_keys]
+        presented.append(
+            {
+                **entry,
+                "changed_labels": changed_labels,
+                "created_label": format_timestamp(entry.get("created_at")),
+            }
+        )
+    return presented
+
+
+def present_action_history(action_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    presented: List[Dict[str, Any]] = []
+    for entry in action_history:
+        status = str(entry.get("status") or "pending").lower()
+        tone = "neutral"
+        if status == "completed":
+            tone = "good"
+        elif status == "failed":
+            tone = "warn"
+        presented.append(
+            {
+                **entry,
+                "label": action_label(str(entry.get("action_type") or "")),
+                "status_tone": tone,
+                "created_label": format_timestamp(entry.get("created_at")),
+                "processed_label": format_timestamp(entry.get("processed_at")) if entry.get("processed_at") else "",
+            }
+        )
+    return presented
+
+
 def normalize_channel_id(raw_value: Any) -> int:
     cleaned = str(raw_value or "").strip()
     if not cleaned:
@@ -294,6 +597,11 @@ async def dashboard(request: Request) -> HTMLResponse:
         {
             "guilds": guilds,
             "locked_guild_id": settings.locked_guild_id,
+            "dashboard_stats": [
+                {"label": "Servers ready", "value": str(len(guilds))},
+                {"label": "Access level", "value": "Manage Server"},
+                {"label": "Environment", "value": "Discord OAuth"},
+            ],
         },
     )
 
@@ -311,9 +619,10 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
         return RedirectResponse("/dashboard", status_code=303)
 
     guild_settings = load_guild_settings(settings.database_url, guild_id, GuildSettings())
-    audit_entries = load_guild_settings_audit(settings.database_url, guild_id)
-    action_history = load_dashboard_actions(settings.database_url, guild_id)
+    audit_entries = present_audit_entries(load_guild_settings_audit(settings.database_url, guild_id))
+    action_history = present_action_history(load_dashboard_actions(settings.database_url, guild_id))
     bot_resources = await fetch_bot_resources(guild_id, settings)
+    dashboard_summary = build_dashboard_summary(guild, guild_settings, audit_entries, action_history, bot_resources)
     return render(
         request,
         "guild.html",
@@ -322,12 +631,13 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
             "guild_settings": guild_settings,
             "audit_entries": audit_entries,
             "action_history": action_history,
-            "action_label": action_label,
             "preview_cards": build_preview_cards(guild, guild_settings),
             "action_options": ACTION_OPTIONS,
             "text_channels": bot_resources["channels"],
             "forum_channels": bot_resources["forum_channels"],
             "roles": bot_resources["roles"],
+            "dashboard_summary": dashboard_summary,
+            "section_nav": SECTION_NAV,
             "message": request.query_params.get("message"),
         },
     )
