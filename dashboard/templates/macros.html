@@ -8,6 +8,16 @@
 </label>
 {%- endmacro %}
 
+{% macro textarea_field(name, label, value, icon="📝", help_text="") -%}
+<label class="field">
+    <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>
+    {% if help_text %}
+    <span class="field-copy">{{ help_text }}</span>
+    {% endif %}
+    <textarea name="{{ name }}" rows="7">{{ value or '' }}</textarea>
+</label>
+{%- endmacro %}
+
 {% macro number_field(name, label, value, icon="🔢", help_text="") -%}
 <label class="field">
     <span class="field-label"><span class="field-icon">{{ icon }}</span>{{ label }}</span>

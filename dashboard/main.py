@@ -6,14 +6,22 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from config import DashboardSettings, load_dashboard_settings
-from settings_store import GuildSettings, ensure_settings_tables, load_guild_settings, load_guild_settings_audit, save_guild_settings
+from settings_store import (
+    GuildSettings,
+    enqueue_dashboard_action,
+    ensure_settings_tables,
+    load_dashboard_actions,
+    load_guild_settings,
+    load_guild_settings_audit,
+    save_guild_settings,
+)
 
 
 DISCORD_API_BASE = "https://discord.com/api"
@@ -21,6 +29,17 @@ DISCORD_OAUTH_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 MANAGE_GUILD_PERMISSION = 0x20
 ADMINISTRATOR_PERMISSION = 0x8
 SETTINGS_FIELDS = list(GuildSettings().to_dict().keys())
+BOOLEAN_FIELDS = {key for key, value in GuildSettings().to_dict().items() if isinstance(value, bool)}
+
+ACTION_OPTIONS = [
+    {"value": "post_staff_panel", "label": "Post Staff Panel", "needs_channel": True},
+    {"value": "post_verification_panel", "label": "Post Verification Panel", "needs_channel": True},
+    {"value": "post_level_panel", "label": "Post Level Panel", "needs_channel": True},
+    {"value": "run_instagram_check", "label": "Run Instagram Check", "needs_channel": False},
+    {"value": "refresh_settings", "label": "Refresh Bot Cache", "needs_channel": False},
+    {"value": "antiraid_activate", "label": "Activate Anti-Raid", "needs_channel": False},
+    {"value": "antiraid_deactivate", "label": "Deactivate Anti-Raid", "needs_channel": False},
+]
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -85,17 +104,23 @@ def require_login(request: Request) -> Optional[RedirectResponse]:
 
 def parse_form_to_settings(form_data: Dict[str, Any]) -> GuildSettings:
     payload: Dict[str, Any] = {}
-    defaults = GuildSettings().to_dict()
     for field in SETTINGS_FIELDS:
-        payload[field] = form_data.get(field, "")
+        if field in BOOLEAN_FIELDS:
+            payload[field] = field in form_data
+        else:
+            payload[field] = form_data.get(field, "")
     return GuildSettings.from_dict(payload, GuildSettings())
 
 
 async def fetch_manageable_guilds(request: Request, settings: DashboardSettings) -> List[Dict[str, Any]]:
     cached_guilds = request.session.get("guilds", [])
-    if isinstance(cached_guilds, list):
-        return [guild for guild in cached_guilds if isinstance(guild, dict)]
-    return []
+    if not isinstance(cached_guilds, list):
+        return []
+
+    guilds = [guild for guild in cached_guilds if isinstance(guild, dict)]
+    if settings.locked_guild_id:
+        guilds = [guild for guild in guilds if int(guild.get("id", 0)) == settings.locked_guild_id]
+    return guilds
 
 
 async def fetch_bot_resources(guild_id: int, settings: DashboardSettings) -> Dict[str, List[Dict[str, Any]]]:
@@ -114,9 +139,7 @@ async def fetch_bot_resources(guild_id: int, settings: DashboardSettings) -> Dic
     except Exception:
         roles = []
 
-    text_channels = [
-        channel for channel in channels if int(channel.get("type", -1)) in {0, 5, 11, 15}
-    ]
+    text_channels = [channel for channel in channels if int(channel.get("type", -1)) in {0, 5, 11, 15}]
     forum_channels = [channel for channel in channels if int(channel.get("type", -1)) == 15]
     roles_sorted = sorted(roles, key=lambda item: int(item.get("position", 0)), reverse=True)
     return {
@@ -133,6 +156,81 @@ def render(request: Request, template_name: str, context: Dict[str, Any]) -> HTM
     }
     base_context.update(context)
     return templates.TemplateResponse(request=request, name=template_name, context=base_context)
+
+
+def action_label(action_type: str) -> str:
+    for option in ACTION_OPTIONS:
+        if option["value"] == action_type:
+            return str(option["label"])
+    return action_type.replace("_", " ").title()
+
+
+def truncate(value: str, limit: int = 280) -> str:
+    cleaned = " ".join(value.replace("\r", "\n").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit - 1]}..."
+
+
+def build_preview_text(template: str, guild_name: str) -> str:
+    preview = template
+    replacements = {
+        "{server}": guild_name,
+        "{member}": "@PlayerOne",
+        "{user}": "@PlayerOne",
+        "{verified_role}": "@Verified",
+        "{verify_channel}": "#verify",
+        "{server_info_channel}": "#server-info",
+        "{intro_channel}": "#intro",
+    }
+    for key, value in replacements.items():
+        preview = preview.replace(key, value)
+    return truncate(preview, 320)
+
+
+def build_preview_cards(guild: Dict[str, Any], guild_settings: GuildSettings) -> List[Dict[str, str]]:
+    guild_name = str(guild.get("name", "Your Server"))
+    return [
+        {
+            "icon": "🎉",
+            "title": guild_settings.welcome_title,
+            "description": build_preview_text(guild_settings.welcome_description, guild_name),
+            "tag": "Welcome",
+        },
+        {
+            "icon": "✅",
+            "title": guild_settings.verification_title,
+            "description": build_preview_text(guild_settings.verification_description, guild_name),
+            "tag": "Verification",
+        },
+        {
+            "icon": "🧾",
+            "title": guild_settings.staff_panel_title,
+            "description": build_preview_text(guild_settings.staff_panel_description, guild_name),
+            "tag": "Staff",
+        },
+        {
+            "icon": "📈",
+            "title": guild_settings.level_panel_title,
+            "description": build_preview_text(guild_settings.level_panel_description, guild_name),
+            "tag": "Leveling",
+        },
+        {
+            "icon": "💬",
+            "title": guild_settings.modmail_intro_title,
+            "description": build_preview_text(guild_settings.modmail_intro_description, guild_name),
+            "tag": "Modmail",
+        },
+    ]
+
+
+def normalize_channel_id(raw_value: Any) -> int:
+    cleaned = str(raw_value or "").strip()
+    if not cleaned:
+        return 0
+    if cleaned.startswith("<#") and cleaned.endswith(">"):
+        cleaned = cleaned[2:-1]
+    return int(cleaned) if cleaned.isdigit() else 0
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -190,7 +288,14 @@ async def dashboard(request: Request) -> HTMLResponse:
 
     settings = get_dashboard_settings()
     guilds = await fetch_manageable_guilds(request, settings)
-    return render(request, "dashboard.html", {"guilds": guilds})
+    return render(
+        request,
+        "dashboard.html",
+        {
+            "guilds": guilds,
+            "locked_guild_id": settings.locked_guild_id,
+        },
+    )
 
 
 @app.get("/dashboard/{guild_id}", response_class=HTMLResponse)
@@ -207,6 +312,7 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
 
     guild_settings = load_guild_settings(settings.database_url, guild_id, GuildSettings())
     audit_entries = load_guild_settings_audit(settings.database_url, guild_id)
+    action_history = load_dashboard_actions(settings.database_url, guild_id)
     bot_resources = await fetch_bot_resources(guild_id, settings)
     return render(
         request,
@@ -215,6 +321,10 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
             "guild": guild,
             "guild_settings": guild_settings,
             "audit_entries": audit_entries,
+            "action_history": action_history,
+            "action_label": action_label,
+            "preview_cards": build_preview_cards(guild, guild_settings),
+            "action_options": ACTION_OPTIONS,
             "text_channels": bot_resources["channels"],
             "forum_channels": bot_resources["forum_channels"],
             "roles": bot_resources["roles"],
@@ -224,35 +334,7 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
 
 
 @app.post("/dashboard/{guild_id}/save")
-async def save_dashboard_guild(
-    request: Request,
-    guild_id: int,
-    modmail_forum_id: str = Form(""),
-    mod_log_channel_id: str = Form(""),
-    staff_application_channel_id: str = Form(""),
-    moderator_role_id: str = Form(""),
-    admin_role_id: str = Form(""),
-    server_log_channel_id: str = Form(""),
-    invite_log_channel_id: str = Form(""),
-    level_up_channel_id: str = Form(""),
-    verification_log_channel_id: str = Form(""),
-    welcome_channel_id: str = Form(""),
-    instagram_notification_channel_id: str = Form(""),
-    verified_role_id: str = Form(""),
-    welcome_banner_url: str = Form(""),
-    instagram_feed_url: str = Form(""),
-    instagram_profile_name: str = Form(""),
-    instagram_poll_minutes: str = Form(""),
-    level_xp_increment: str = Form(""),
-    anti_raid_enabled: Optional[str] = Form(None),
-    anti_raid_join_threshold: str = Form(""),
-    anti_raid_window_seconds: str = Form(""),
-    anti_raid_lockdown_minutes: str = Form(""),
-    anti_raid_account_age_minutes: str = Form(""),
-    anti_raid_timeout_minutes: str = Form(""),
-    server_name: str = Form(""),
-    bot_status_text: str = Form(""),
-) -> RedirectResponse:
+async def save_dashboard_guild(request: Request, guild_id: int) -> RedirectResponse:
     redirect = require_login(request)
     if redirect is not None:
         return redirect
@@ -263,39 +345,9 @@ async def save_dashboard_guild(
     if guild is None:
         return RedirectResponse("/dashboard", status_code=303)
 
-    form_payload = {
-        key: value
-        for key, value in {
-            "modmail_forum_id": modmail_forum_id,
-            "mod_log_channel_id": mod_log_channel_id,
-            "staff_application_channel_id": staff_application_channel_id,
-            "moderator_role_id": moderator_role_id,
-            "admin_role_id": admin_role_id,
-            "server_log_channel_id": server_log_channel_id,
-            "invite_log_channel_id": invite_log_channel_id,
-            "level_up_channel_id": level_up_channel_id,
-            "verification_log_channel_id": verification_log_channel_id,
-            "welcome_channel_id": welcome_channel_id,
-            "instagram_notification_channel_id": instagram_notification_channel_id,
-            "verified_role_id": verified_role_id,
-            "welcome_banner_url": welcome_banner_url,
-            "instagram_feed_url": instagram_feed_url,
-            "instagram_profile_name": instagram_profile_name,
-            "instagram_poll_minutes": instagram_poll_minutes,
-            "level_xp_increment": level_xp_increment,
-            "anti_raid_enabled": anti_raid_enabled is not None,
-            "anti_raid_join_threshold": anti_raid_join_threshold,
-            "anti_raid_window_seconds": anti_raid_window_seconds,
-            "anti_raid_lockdown_minutes": anti_raid_lockdown_minutes,
-            "anti_raid_account_age_minutes": anti_raid_account_age_minutes,
-            "anti_raid_timeout_minutes": anti_raid_timeout_minutes,
-            "server_name": server_name,
-            "bot_status_text": bot_status_text,
-        }.items()
-    }
-
+    form = await request.form()
     previous = load_guild_settings(settings.database_url, guild_id, GuildSettings())
-    current = parse_form_to_settings(form_payload)
+    current = parse_form_to_settings(dict(form))
     save_guild_settings(
         settings.database_url,
         guild_id,
@@ -304,3 +356,61 @@ async def save_dashboard_guild(
         previous=previous,
     )
     return RedirectResponse(f"/dashboard/{guild_id}?message=saved", status_code=303)
+
+
+@app.post("/dashboard/{guild_id}/reset")
+async def reset_dashboard_guild(request: Request, guild_id: int) -> RedirectResponse:
+    redirect = require_login(request)
+    if redirect is not None:
+        return redirect
+
+    settings = get_dashboard_settings()
+    guilds = await fetch_manageable_guilds(request, settings)
+    guild = next((item for item in guilds if int(item["id"]) == guild_id), None)
+    if guild is None:
+        return RedirectResponse("/dashboard", status_code=303)
+
+    defaults = GuildSettings()
+    previous = load_guild_settings(settings.database_url, guild_id, defaults)
+    save_guild_settings(
+        settings.database_url,
+        guild_id,
+        defaults,
+        updated_by=int(request.session["user"]["id"]),
+        previous=previous,
+    )
+    return RedirectResponse(f"/dashboard/{guild_id}?message=reset", status_code=303)
+
+
+@app.post("/dashboard/{guild_id}/actions")
+async def queue_dashboard_action(request: Request, guild_id: int) -> RedirectResponse:
+    redirect = require_login(request)
+    if redirect is not None:
+        return redirect
+
+    settings = get_dashboard_settings()
+    guilds = await fetch_manageable_guilds(request, settings)
+    guild = next((item for item in guilds if int(item["id"]) == guild_id), None)
+    if guild is None:
+        return RedirectResponse("/dashboard", status_code=303)
+
+    form = await request.form()
+    action_type = str(form.get("action_type", "")).strip()
+    if action_type not in {option["value"] for option in ACTION_OPTIONS}:
+        return RedirectResponse(f"/dashboard/{guild_id}?message=invalid_action", status_code=303)
+
+    payload: Dict[str, Any] = {}
+    channel_id = normalize_channel_id(form.get("action_channel_id"))
+    if action_type.startswith("post_") and channel_id <= 0:
+        return RedirectResponse(f"/dashboard/{guild_id}?message=action_needs_channel", status_code=303)
+    if channel_id > 0:
+        payload["channel_id"] = channel_id
+
+    enqueue_dashboard_action(
+        settings.database_url,
+        guild_id,
+        action_type,
+        requested_by=int(request.session["user"]["id"]),
+        payload=payload,
+    )
+    return RedirectResponse(f"/dashboard/{guild_id}?message=action_queued", status_code=303)

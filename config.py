@@ -47,6 +47,7 @@ class DashboardSettings:
     discord_redirect_uri: str
     session_secret: str
     bot_api_token: str = ""
+    locked_guild_id: int = 0
 
 
 def _require_int(name: str) -> int:
@@ -150,4 +151,5 @@ def load_dashboard_settings() -> DashboardSettings:
         discord_redirect_uri=_require_str("DISCORD_REDIRECT_URI"),
         session_secret=_require_str("SESSION_SECRET"),
         bot_api_token=os.getenv("DISCORD_TOKEN", "").strip(),
+        locked_guild_id=_get_optional_int("DASHBOARD_LOCKED_GUILD_ID"),
     )

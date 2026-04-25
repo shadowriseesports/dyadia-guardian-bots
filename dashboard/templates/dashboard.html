@@ -5,16 +5,23 @@
         <div>
             <span class="section-kicker">🛰️ Server Workspace</span>
             <h1>Your Servers</h1>
-            <p>Only servers where you have Administrator or Manage Server are shown here.</p>
+            <p>Only servers where you have Administrator or Manage Server are shown here.{% if locked_guild_id %} This dashboard is locked to one configured guild.{% endif %}</p>
         </div>
         <div class="chip-row">
             <span class="chip">🎯 {{ guilds|length }} server{% if guilds|length != 1 %}s{% endif %}</span>
             <span class="chip">🔒 Discord OAuth</span>
         </div>
     </div>
+    <div class="card soft" style="margin-bottom: 1rem;">
+        <label class="field">
+            <span class="field-label"><span class="field-icon">🔎</span>Server Search</span>
+            <span class="field-copy">Filter the server list instantly by guild name or ID.</span>
+            <input id="guild-search" type="text" placeholder="Search your servers...">
+        </label>
+    </div>
     <div class="grid">
         {% for guild in guilds %}
-        <a class="card guild-card" href="/dashboard/{{ guild.id }}">
+        <a class="card guild-card" href="/dashboard/{{ guild.id }}" data-guild-name="{{ guild.name|lower }}" data-guild-id="{{ guild.id }}">
             <div class="guild-card-header">
                 <div class="guild-mark">🏰</div>
                 <div>
@@ -41,4 +48,18 @@
         {% endfor %}
     </div>
 </section>
+<script>
+    (() => {
+        const search = document.getElementById("guild-search");
+        if (!search) return;
+        const cards = Array.from(document.querySelectorAll("[data-guild-name]"));
+        search.addEventListener("input", () => {
+            const query = search.value.trim().toLowerCase();
+            cards.forEach((card) => {
+                const haystack = `${card.dataset.guildName} ${card.dataset.guildId}`;
+                card.style.display = !query || haystack.includes(query) ? "" : "none";
+            });
+        });
+    })();
+</script>
 {% endblock %}
