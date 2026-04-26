@@ -4,7 +4,7 @@ Clean Python Discord bot for moderation, verification, modmail, staff applicatio
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel`, `autoreact ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel`, `qotd`, `autoreact ...`, `nolink ...`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Persistent HOK Dyadia verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
@@ -12,6 +12,7 @@ Clean Python Discord bot for moderation, verification, modmail, staff applicatio
 - Moderation log history, stored in PostgreSQL when `DATABASE_URL` is configured
 - Server activity logs for message deletes/edits, image deletes, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins/leaves/moves, and ban/unban events
 - Staff application panel with 2-page modal workflow
+- QOTD posting command that pings the `❓QOTD` role and opens a public reply thread automatically
 - No-link channel protection with per-channel activate and deactivate commands
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
 - Persistent leveling and invite tracking data with `/rank`, `/leaderboard`, `/levelpanel`, `/invites`, and `/inviteleaderboard`

@@ -45,6 +45,7 @@ DEFAULT_WELCOME_BANNER_URL = (
     "?ex=69eb2b9d&is=69e9da1d&hm=2e3160662ba66f477d6e690dab45e3b786e2a2ec82a33f51c20dc1318cb1b80c&"
 )
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
+QOTD_ROLE_NAME = "❓QOTD"
 LEVEL_DATA_PATH = Path("level_data.json")
 INVITE_DATA_PATH = Path("invite_data.json")
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
@@ -254,6 +255,13 @@ def truncate_text(value: str, limit: int = 1000) -> str:
     if len(value) <= limit:
         return value
     return f"{value[: limit - 3]}..."
+
+
+def slugify_text(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    cleaned = re.sub(r"[^\w\s-]", "", normalized, flags=re.UNICODE)
+    collapsed = re.sub(r"[-\s]+", "-", cleaned).strip("-")
+    return collapsed.lower()
 
 
 def normalize_optional_text(value: str) -> Optional[str]:
@@ -934,6 +942,11 @@ class DyadiaGuardianBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
+                name="QOTD",
+                value="`/qotd` post a Question of the Day, ping the QOTD role, and open a reply thread",
+                inline=False,
+            )
+            embed.add_field(
                 name="No-Link Channels",
                 value=(
                     "`/nolink activate` delete link messages in a selected channel\n"
@@ -1069,6 +1082,20 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_embed_builder(interaction, channel)
+
+        @tree.command(name="qotd", description="Post a Question of the Day and open a reply thread")
+        @app_commands.describe(
+            question="The Question of the Day text",
+            channel="Channel where the QOTD should be posted",
+            auto_archive_hours="How long until the thread auto-archives",
+        )
+        async def qotd(
+            interaction: discord.Interaction,
+            question: str,
+            channel: Optional[discord.TextChannel] = None,
+            auto_archive_hours: app_commands.Range[int, 1, 168] = 24,
+        ) -> None:
+            await self.handle_qotd(interaction, question, channel, auto_archive_hours)
 
         @tree.command(name="instagramstatus", description="Show Instagram notification settings and status")
         async def instagramstatus(interaction: discord.Interaction) -> None:
@@ -2913,6 +2940,29 @@ class DyadiaGuardianBot(commands.Bot):
 
         return make_embed("Auto-Reactions", "\n".join(lines), discord.Color.blurple())
 
+    def get_qotd_role(self, guild: discord.Guild) -> Optional[discord.Role]:
+        return discord.utils.get(guild.roles, name=QOTD_ROLE_NAME)
+
+    def create_qotd_embed(self, question: str) -> discord.Embed:
+        return make_embed(
+            "📌 Question of the Day",
+            question,
+            discord.Color.gold(),
+            footer="Reply in the thread below 👇",
+        )
+
+    def create_qotd_thread_name(self, question: str) -> str:
+        short_text = truncate_text(question, 45)
+        slug = slugify_text(short_text)
+        if slug:
+            return truncate_text(f"QOTD - {slug}", 100)
+        return f"QOTD - {utc_now().strftime('%Y-%m-%d')}"
+
+    def normalize_thread_archive_duration(self, hours: int) -> int:
+        requested_minutes = max(60, hours * 60)
+        valid_durations = (60, 1440, 4320, 10080)
+        return min(valid_durations, key=lambda duration: (abs(duration - requested_minutes), duration))
+
     def instagram_notifications_enabled(self) -> bool:
         return bool(self.settings.instagram_feed_url and self.settings.instagram_notification_channel_id)
 
@@ -3558,6 +3608,83 @@ class DyadiaGuardianBot(commands.Bot):
         await target_channel.send(embed=self.create_leveling_panel_embed(interaction.guild))
         await interaction.response.send_message(
             f"Leveling panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_qotd(
+        self,
+        interaction: discord.Interaction,
+        question: str,
+        channel: Optional[discord.TextChannel],
+        auto_archive_hours: int,
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        cleaned_question = normalize_optional_text(question)
+        if cleaned_question is None:
+            await interaction.response.send_message("Please provide a Question of the Day.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for the QOTD post.", ephemeral=True)
+                return
+
+        qotd_role = self.get_qotd_role(interaction.guild)
+        role_mention = qotd_role.mention if qotd_role is not None else f"@{QOTD_ROLE_NAME}"
+        content = f"{role_mention}\nNew Question of the Day is up."
+        embed = self.create_qotd_embed(cleaned_question)
+        archive_duration = self.normalize_thread_archive_duration(auto_archive_hours)
+
+        try:
+            message = await target_channel.send(
+                content=content,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post QOTD message in channel %s", target_channel.id)
+            await interaction.response.send_message(
+                f"I could not send the QOTD message in {target_channel.mention}. Check my permissions there.",
+                ephemeral=True,
+            )
+            return
+
+        thread_name = self.create_qotd_thread_name(cleaned_question)
+        try:
+            thread = await message.create_thread(
+                name=thread_name,
+                auto_archive_duration=archive_duration,
+            )
+            try:
+                await thread.send("Reply to today’s question here so the main channel stays clean.")
+            except discord.HTTPException:
+                LOGGER.warning("Failed to send QOTD thread prompt in thread %s", thread.id)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to create QOTD thread for message %s", message.id)
+            await interaction.response.send_message(
+                (
+                    f"QOTD posted in {target_channel.mention}, but I could not create the thread. "
+                    "Check my thread permissions in that channel."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        archive_text = format_duration(timedelta(minutes=archive_duration))
+        role_text = role_mention if qotd_role is not None else f"`{QOTD_ROLE_NAME}` role not found"
+        await interaction.response.send_message(
+            (
+                f"QOTD posted in {target_channel.mention} and thread {thread.mention} opened. "
+                f"Pinged: {role_text}. Auto-archive: {archive_text}."
+            ),
             ephemeral=True,
         )
 
