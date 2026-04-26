@@ -1,6 +1,6 @@
 # Dyadia Guardian Bot
 
-Clean Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, chat-based leveling, Instagram feed notifications, and a Railway-ready web dashboard.
+Clean Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, chat-based leveling, and Instagram feed notifications.
 
 ## Kept Features
 
@@ -16,7 +16,6 @@ Clean Python Discord bot for moderation, verification, modmail, staff applicatio
 - Persistent leveling and invite tracking data with `/rank`, `/leaderboard`, `/levelpanel`, `/invites`, and `/inviteleaderboard`
 - Automatic rank-role rewards based on your Honor of Kings leveling ladder
 - Instagram post/reel notifications from a configured RSS or Atom feed to a Discord text channel
-- FastAPI dashboard with Discord login for managing guild settings from the browser
 
 ## Project Structure
 
@@ -74,5 +73,3 @@ Enable these intents for the bot:
 - Invite tracking requires the bot to have `Manage Server` permission so it can read server invites.
 - Reward roles are matched by role name, so create the reward roles in Discord using the exact names from the leveling panel.
 - Instagram does not provide a simple public feed by itself, so `INSTAGRAM_FEED_URL` should point to an RSS or Atom feed for the Instagram account you want to watch.
-- For Railway dashboard deployment, run a second service with the start command `uvicorn dashboard.main:app --host 0.0.0.0 --port $PORT`.
-- The dashboard uses `DATABASE_URL`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`, and `SESSION_SECRET`.
