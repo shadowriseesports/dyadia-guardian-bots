@@ -68,9 +68,8 @@ Enable these intents for the bot:
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
 - Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
 - Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
-- If `DATABASE_URL` is set, leveling and invite tracking data are stored in PostgreSQL automatically.
-- If `DATABASE_URL` is not set, leveling falls back to `level_data.json` and invite tracking falls back to `invite_data.json` for local use.
-- Auto-reaction rules are stored in `autoreact_data.json` for local use.
+- If `DATABASE_URL` is set, leveling, invite tracking, auto-reaction rules, and moderation logs are stored in PostgreSQL automatically.
+- If `DATABASE_URL` is not set, leveling falls back to `level_data.json`, invite tracking falls back to `invite_data.json`, auto-reaction rules fall back to `autoreact_data.json`, and moderation logs remain in-memory for local use.
 - No-link channel rules are stored in `no_link_channels.json` for local use.
 - Instagram notifications use `instagram_state.json` to remember already-sent feed items and avoid reposting them after restarts.
 - Invite tracking requires the bot to have `Manage Server` permission so it can read server invites.

@@ -631,6 +631,8 @@ class DyadiaGuardianBot(commands.Bot):
         self.staff_application_view = StaffApplicationView()
 
     async def setup_hook(self) -> None:
+        if self.uses_postgres:
+            await asyncio.to_thread(self.ensure_postgres_schema)
         await self.load_level_data()
         await self.load_invite_data()
         await self.load_autoreact_data()
@@ -645,6 +647,38 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_feed_loop.change_interval(minutes=self.settings.instagram_poll_minutes)
         if self.instagram_notifications_enabled():
             self.instagram_feed_loop.start()
+
+    def ensure_postgres_schema(self) -> None:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS mod_logs (
+                            id BIGSERIAL PRIMARY KEY,
+                            guild_id BIGINT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            moderator_id BIGINT NOT NULL,
+                            action TEXT NOT NULL,
+                            reason TEXT NOT NULL,
+                            duration_text TEXT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS autoreact_configs (
+                            guild_id BIGINT NOT NULL,
+                            channel_id BIGINT NOT NULL,
+                            emojis TEXT[] NOT NULL,
+                            PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to ensure PostgreSQL schema.")
 
     async def on_ready(self) -> None:
         synced = await self.tree.sync()
@@ -2281,6 +2315,11 @@ class DyadiaGuardianBot(commands.Bot):
         self.autoreact_configs = await asyncio.to_thread(self._load_autoreact_data_sync)
 
     def _load_autoreact_data_sync(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
+        if self.uses_postgres:
+            return self._load_autoreact_data_from_postgres()
+        return self._load_autoreact_data_from_json()
+
+    def _load_autoreact_data_from_json(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
         loaded_data: Dict[int, Dict[int, AutoReactionConfig]] = {}
         if not AUTOREACT_DATA_PATH.exists():
             LOGGER.info("Auto-reaction data file %s not found. A new one will be created on first activation.", AUTOREACT_DATA_PATH)
@@ -2323,7 +2362,52 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.info("Loaded auto-reaction data for %s guild(s) from %s", len(loaded_data), AUTOREACT_DATA_PATH)
         return loaded_data
 
+    def _load_autoreact_data_from_postgres(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
+        loaded_data: Dict[int, Dict[int, AutoReactionConfig]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS autoreact_configs (
+                            guild_id BIGINT NOT NULL,
+                            channel_id BIGINT NOT NULL,
+                            emojis TEXT[] NOT NULL,
+                            PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        SELECT guild_id, channel_id, emojis
+                        FROM autoreact_configs
+                        """
+                    )
+                    for guild_id, channel_id, raw_emojis in cur.fetchall():
+                        parsed_emojis: List[str] = []
+                        for raw_emoji in raw_emojis if isinstance(raw_emojis, list) else []:
+                            emoji = self.normalize_autoreact_emoji(str(raw_emoji))
+                            if emoji is not None and emoji not in parsed_emojis:
+                                parsed_emojis.append(emoji)
+                        if not parsed_emojis:
+                            continue
+                        guild_configs = loaded_data.setdefault(int(guild_id), {})
+                        guild_configs[int(channel_id)] = AutoReactionConfig(emojis=parsed_emojis)
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to load auto-reaction data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded auto-reaction data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
     def save_autoreact_data(self) -> None:
+        if self.uses_postgres:
+            self._save_autoreact_data_to_postgres()
+            return
+        self._save_autoreact_data_to_json()
+
+    def _save_autoreact_data_to_json(self) -> None:
         serialized = {
             str(guild_id): {
                 str(channel_id): config.emojis
@@ -2335,6 +2419,39 @@ class DyadiaGuardianBot(commands.Bot):
             AUTOREACT_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
         except OSError:
             LOGGER.exception("Failed to save auto-reaction data to %s", AUTOREACT_DATA_PATH)
+
+    def _save_autoreact_data_to_postgres(self) -> None:
+        rows = [
+            (guild_id, channel_id, config.emojis)
+            for guild_id, channel_configs in self.autoreact_configs.items()
+            for channel_id, config in channel_configs.items()
+            if config.emojis
+        ]
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS autoreact_configs (
+                            guild_id BIGINT NOT NULL,
+                            channel_id BIGINT NOT NULL,
+                            emojis TEXT[] NOT NULL,
+                            PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute("DELETE FROM autoreact_configs")
+                    if rows:
+                        cur.executemany(
+                            """
+                            INSERT INTO autoreact_configs (guild_id, channel_id, emojis)
+                            VALUES (%s, %s, %s)
+                            """,
+                            rows,
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save auto-reaction data to PostgreSQL.")
 
     async def persist_autoreact_data(self) -> None:
         await asyncio.to_thread(self.save_autoreact_data)
