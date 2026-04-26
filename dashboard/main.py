@@ -75,6 +75,7 @@ SECTION_NAV = [
     {"id": "instagram-settings", "label": "Instagram"},
     {"id": "leveling", "label": "Leveling"},
     {"id": "anti-raid", "label": "Anti-Raid"},
+    {"id": "website-actions", "label": "Actions"},
 ]
 
 ACTION_OPTIONS = [
@@ -89,10 +90,23 @@ ACTION_OPTIONS = [
     {"value": "post_invite_leaderboard", "label": "Post Invite Leaderboard", "needs_channel": True},
     {"value": "post_rank_card", "label": "Post Rank Card", "needs_channel": True, "needs_member": True},
     {"value": "post_invite_stats", "label": "Post Invite Stats", "needs_channel": True, "needs_member": True},
+    {"value": "post_modlogs", "label": "Post Member Mod Logs", "needs_channel": True, "needs_member": True},
     {"value": "run_instagram_check", "label": "Run Instagram Check", "needs_channel": False},
     {"value": "refresh_settings", "label": "Refresh Bot Cache", "needs_channel": False},
+    {"value": "antiraid_enable", "label": "Enable Anti-Raid Monitoring", "needs_channel": False},
+    {"value": "antiraid_disable", "label": "Disable Anti-Raid Monitoring", "needs_channel": False},
     {"value": "antiraid_activate", "label": "Activate Anti-Raid", "needs_channel": False},
     {"value": "antiraid_deactivate", "label": "Deactivate Anti-Raid", "needs_channel": False},
+    {"value": "warn_member", "label": "Warn Member", "needs_member": True},
+    {"value": "mute_member", "label": "Timeout Member", "needs_member": True},
+    {"value": "kick_member", "label": "Kick Member", "needs_member": True},
+    {"value": "ban_member", "label": "Ban Member", "needs_member": True},
+    {"value": "unban_user", "label": "Unban User", "needs_member": True},
+    {"value": "add_member_role", "label": "Add Role To Member", "needs_member": True, "needs_role": True},
+    {"value": "remove_member_role", "label": "Remove Role From Member", "needs_member": True, "needs_role": True},
+    {"value": "clear_messages", "label": "Clear Messages", "needs_channel": True},
+    {"value": "autoreact_activate", "label": "Activate Auto-Reactions", "needs_channel": True},
+    {"value": "autoreact_deactivate", "label": "Deactivate Auto-Reactions", "needs_channel": True},
     {"value": "send_custom_embed", "label": "Send Custom Embed", "needs_channel": True},
 ]
 ACTION_OPTION_MAP = {str(option["value"]): option for option in ACTION_OPTIONS}
@@ -514,18 +528,17 @@ def parse_dashboard_autoreact_rules(value: str, resources: Dict[str, List[Dict[s
 def build_feature_coverage() -> Dict[str, List[str]]:
     return {
         "dashboard_supported": [
-            "Panel posting for staff applications, verification, and leveling",
-            "Auto-reaction rules through dashboard settings",
-            "Instagram checks, status posting, and notifier configuration",
-            "Anti-raid toggles, status posting, and threshold configuration",
-            "Rank card, invite stats, and leaderboard posting through queued bot actions",
-            "Custom embed sending and bot cache refresh",
+            "Moderation actions including warn, timeout, kick, ban, unban, and bulk clear",
+            "Role management, auto-reaction activation, and anti-raid runtime controls",
+            "Panel posting for staff applications, verification, leveling, help, and analytics",
+            "Instagram checks, status posting, notifier configuration, and custom embeds",
+            "Rank cards, invite stats, mod log exports, and leaderboard posting",
+            "Stored guild configuration for welcome, logs, leveling, verification, and branding",
         ],
         "discord_runtime": [
-            "Interactive slash-command moderation like warn, mute, kick, ban, unban, and bulk clear",
             "Live modmail conversations and close actions",
             "Verification button presses and staff application submissions",
-            "Ephemeral one-off responses such as /rank or /modlogs directly to staff members",
+            "Automatic welcome posts, invite tracking, XP gain, and raid detection events",
         ],
     }
 
@@ -647,6 +660,15 @@ def normalize_user_id(raw_value: Any) -> int:
     return int(cleaned) if cleaned.isdigit() else 0
 
 
+def normalize_role_id(raw_value: Any) -> int:
+    cleaned = str(raw_value or "").strip()
+    if not cleaned:
+        return 0
+    if cleaned.startswith("<@&") and cleaned.endswith(">"):
+        cleaned = cleaned[3:-1]
+    return int(cleaned) if cleaned.isdigit() else 0
+
+
 def normalize_optional_text(value: Any, *, limit: int = 2000) -> str:
     cleaned = str(value or "").strip()
     return cleaned[:limit]
@@ -667,6 +689,44 @@ def build_action_payload(form: Dict[str, Any], action_type: str) -> Dict[str, An
         raise ValueError("member")
     if member_id > 0:
         payload["member_id"] = member_id
+
+    role_id = normalize_role_id(form.get("action_role_id"))
+    if option.get("needs_role") and role_id <= 0:
+        raise ValueError("role")
+    if role_id > 0:
+        payload["role_id"] = role_id
+
+    reason_text = normalize_optional_text(form.get("action_reason"), limit=500)
+    if reason_text:
+        payload["reason"] = reason_text
+
+    duration_text = normalize_optional_text(form.get("action_duration"), limit=32)
+    if action_type == "mute_member":
+        if not duration_text:
+            raise ValueError("duration")
+        payload["duration"] = duration_text
+
+    if action_type == "ban_member":
+        try:
+            delete_days = int(form.get("action_delete_days") or 0)
+        except (TypeError, ValueError):
+            delete_days = 0
+        payload["delete_days"] = max(0, min(7, delete_days))
+
+    if action_type == "clear_messages":
+        try:
+            clear_amount = int(form.get("action_clear_amount") or 0)
+        except (TypeError, ValueError):
+            clear_amount = 0
+        if clear_amount <= 0:
+            raise ValueError("amount")
+        payload["amount"] = min(clear_amount, 1000)
+
+    if action_type == "autoreact_activate":
+        emojis = normalize_optional_text(form.get("action_emojis"), limit=200)
+        if not emojis:
+            raise ValueError("emoji")
+        payload["emojis"] = emojis
 
     if action_type == "send_custom_embed":
         message_content = normalize_optional_text(form.get("message_content"), limit=2000)
@@ -912,6 +972,10 @@ async def queue_dashboard_action(request: Request, guild_id: int) -> RedirectRes
         message = {
             "channel": "action_needs_channel",
             "member": "action_needs_member",
+            "role": "action_needs_role",
+            "duration": "action_needs_duration",
+            "amount": "action_needs_amount",
+            "emoji": "action_needs_emoji",
             "embed_content": "action_needs_embed_content",
         }.get(reason, "invalid_action")
         return RedirectResponse(f"/dashboard/{guild_id}?message={message}", status_code=303)

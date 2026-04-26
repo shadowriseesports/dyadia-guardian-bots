@@ -519,6 +519,10 @@ p {
     margin-top: 1rem;
 }
 
+.compact-grid {
+    margin-top: 0;
+}
+
 .field {
     display: flex;
     flex-direction: column;

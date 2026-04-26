@@ -4292,13 +4292,30 @@ class DyadiaGuardianBot(commands.Bot):
             raise RuntimeError(f"I could not resolve member {member_id} in guild {guild.id}.")
         return member
 
+    def resolve_dashboard_action_role(self, guild: discord.Guild, role_id: int) -> discord.Role:
+        role = guild.get_role(role_id)
+        if role is None:
+            raise RuntimeError(f"I could not resolve role {role_id} in guild {guild.id}.")
+        return role
+
+    def resolve_dashboard_action_actor(self, guild: discord.Guild, requested_by: int) -> discord.abc.User:
+        member = guild.get_member(requested_by)
+        if member is not None:
+            return member
+        actor = self.get_user(requested_by)
+        if actor is not None:
+            return actor
+        return self.user or guild.me or discord.Object(id=requested_by)
+
     async def execute_dashboard_action(self, action: Dict[str, Any]) -> str:
         guild_id = int(action["guild_id"])
         action_type = str(action["action_type"])
         payload = action.get("payload", {}) if isinstance(action.get("payload"), dict) else {}
+        requested_by = int(action.get("requested_by") or 0)
         guild = self.get_guild(guild_id)
         if guild is None:
             raise RuntimeError(f"I am not connected to guild {guild_id}.")
+        actor = self.resolve_dashboard_action_actor(guild, requested_by) if requested_by > 0 else (self.user or guild.me)
 
         if action_type == "refresh_settings":
             await self.refresh_guild_settings_cache_once()
@@ -4318,66 +4335,292 @@ class DyadiaGuardianBot(commands.Bot):
             sent_count = await self.poll_instagram_feed_once()
             return f"Instagram check completed. Sent {sent_count} notification(s)."
 
+        if action_type == "antiraid_enable":
+            state = self.get_anti_raid_state(guild.id)
+            state.enabled = True
+            return "Anti-raid monitoring enabled."
+
+        if action_type == "antiraid_disable":
+            state = self.get_anti_raid_state(guild.id)
+            state.enabled = False
+            state.lockdown_until = None
+            state.manual_lockdown = False
+            return "Anti-raid monitoring disabled."
+
         if action_type == "antiraid_activate":
-            await self.activate_anti_raid(guild, self.user, "Raid mode was activated from the dashboard.", manual=True)
+            await self.activate_anti_raid(guild, actor, "Raid mode was activated from the dashboard.", manual=True)
             return "Anti-raid activated."
 
         if action_type == "antiraid_deactivate":
             state = self.get_anti_raid_state(guild.id)
             if self.anti_raid_is_active(state):
-                await self.deactivate_anti_raid(guild, self.user, "Raid mode was turned off from the dashboard.")
+                await self.deactivate_anti_raid(guild, actor, "Raid mode was turned off from the dashboard.")
             else:
                 state.enabled = False
             return "Anti-raid deactivated."
 
-        channel_id = int(payload.get("channel_id", 0) or 0)
-        target_channel = await self.resolve_dashboard_action_channel(guild, channel_id)
+        target_channel: Optional[discord.TextChannel] = None
+        channel_actions = {
+            "post_staff_panel",
+            "post_verification_panel",
+            "post_level_panel",
+            "post_help",
+            "post_autoreact_summary",
+            "post_instagram_status",
+            "post_antiraid_status",
+            "post_level_leaderboard",
+            "post_invite_leaderboard",
+            "post_rank_card",
+            "post_invite_stats",
+            "post_modlogs",
+            "clear_messages",
+            "autoreact_activate",
+            "autoreact_deactivate",
+            "send_custom_embed",
+        }
+        if action_type in channel_actions:
+            channel_id = int(payload.get("channel_id", 0) or 0)
+            target_channel = await self.resolve_dashboard_action_channel(guild, channel_id)
+
         if action_type == "post_staff_panel":
+            assert target_channel is not None
             await target_channel.send(embed=self.create_staff_application_panel_embed(), view=self.staff_application_view)
             return f"Staff application panel posted in {target_channel.mention}."
         if action_type == "post_verification_panel":
+            assert target_channel is not None
             await target_channel.send(embed=self.create_verification_panel_embed(guild), view=self.verification_view)
             return f"Verification panel posted in {target_channel.mention}."
         if action_type == "post_level_panel":
+            assert target_channel is not None
             await target_channel.send(embed=self.create_leveling_panel_embed(guild))
             return f"Leveling panel posted in {target_channel.mention}."
         if action_type == "post_help":
+            assert target_channel is not None
             await target_channel.send(embed=self.create_help_embed())
             return f"Help overview posted in {target_channel.mention}."
         if action_type == "post_autoreact_summary":
+            assert target_channel is not None
             await target_channel.send(embed=self.create_autoreact_embed(guild))
             return f"Auto-reaction summary posted in {target_channel.mention}."
         if action_type == "post_instagram_status":
+            assert target_channel is not None
             channel = await self.get_instagram_notification_channel()
             await target_channel.send(embed=self.create_instagram_status_embed(channel))
             return f"Instagram status posted in {target_channel.mention}."
         if action_type == "post_antiraid_status":
+            assert target_channel is not None
             state = self.get_anti_raid_state(guild.id)
             await target_channel.send(embed=self.create_anti_raid_status_embed(guild, state))
             return f"Anti-raid status posted in {target_channel.mention}."
         if action_type == "post_level_leaderboard":
+            assert target_channel is not None
             embed = self.create_leveling_leaderboard_embed(guild)
             if embed is None:
                 raise RuntimeError("Nobody has earned XP yet in this guild.")
             await target_channel.send(embed=embed)
             return f"Level leaderboard posted in {target_channel.mention}."
         if action_type == "post_invite_leaderboard":
+            assert target_channel is not None
             embed = self.create_invite_leaderboard_embed(guild)
             if embed is None:
                 raise RuntimeError("No tracked invite joins are available yet in this guild.")
             await target_channel.send(embed=embed)
             return f"Invite leaderboard posted in {target_channel.mention}."
         if action_type == "post_rank_card":
+            assert target_channel is not None
             member_id = int(payload.get("member_id", 0) or 0)
             member = self.resolve_dashboard_action_member(guild, member_id)
             await target_channel.send(embed=self.create_rank_embed(member))
             return f"Rank card posted for {member.display_name} in {target_channel.mention}."
         if action_type == "post_invite_stats":
+            assert target_channel is not None
             member_id = int(payload.get("member_id", 0) or 0)
             member = self.resolve_dashboard_action_member(guild, member_id)
             await target_channel.send(embed=self.create_invite_count_embed(guild, member))
             return f"Invite stats posted for {member.display_name} in {target_channel.mention}."
+        if action_type == "post_modlogs":
+            assert target_channel is not None
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            related = [entry for entry in reversed(self.mod_logs) if entry.user_id == member.id][:10]
+            description = "\n".join(
+                f"`{entry.action}` by <@{entry.moderator_id}> - {entry.reason}"
+                + (f" ({entry.duration_text})" if entry.duration_text else "")
+                for entry in related
+            ) or "No in-memory moderation entries found for this user yet."
+            embed = make_embed(
+                "Moderation Logs",
+                f"User: **{member}** (`{member.id}`)\n\n{description}",
+                discord.Color.blurple(),
+            )
+            await target_channel.send(embed=embed)
+            return f"Moderation logs posted for {member.display_name} in {target_channel.mention}."
+        if action_type == "warn_member":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            reason = str(payload.get("reason") or "No reason provided")
+            await self.safe_dm(
+                member,
+                make_embed(
+                    "Warning",
+                    f"You have been warned in **{guild.name}**.\n\nReason: {reason}",
+                    discord.Color.yellow(),
+                ),
+            )
+            embed = self.create_modlog_embed("WARN", member, actor, reason)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("WARN", member, actor, reason)
+            return f"Warned {member.display_name}."
+        if action_type == "mute_member":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            reason = str(payload.get("reason") or "No reason provided")
+            duration_text = str(payload.get("duration") or "").strip()
+            duration = parse_duration(duration_text)
+            if duration is None:
+                raise RuntimeError("Mute action needs a valid duration like 10m, 1h, or 1d.")
+            if duration > timedelta(days=MAX_TIMEOUT_DAYS):
+                raise RuntimeError("Duration cannot exceed 28 days.")
+            await member.timeout(duration, reason=reason)
+            await self.safe_dm(
+                member,
+                make_embed(
+                    "Timeout",
+                    f"You have been timed out in **{guild.name}** for {format_duration(duration)}.\n\nReason: {reason}",
+                    discord.Color.orange(),
+                ),
+            )
+            embed = self.create_modlog_embed("MUTE", member, actor, reason)
+            embed.add_field(name="Duration", value=format_duration(duration), inline=False)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("MUTE", member, actor, reason, format_duration(duration))
+            return f"Timed out {member.display_name} for {format_duration(duration)}."
+        if action_type == "kick_member":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            reason = str(payload.get("reason") or "No reason provided")
+            await self.safe_dm(
+                member,
+                make_embed(
+                    "Kick",
+                    f"You have been kicked from **{guild.name}**.\n\nReason: {reason}",
+                    discord.Color.red(),
+                ),
+            )
+            await member.kick(reason=reason)
+            embed = self.create_modlog_embed("KICK", member, actor, reason)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("KICK", member, actor, reason)
+            return f"Kicked {member.display_name}."
+        if action_type == "ban_member":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            reason = str(payload.get("reason") or "No reason provided")
+            delete_days = max(0, min(7, int(payload.get("delete_days", 0) or 0)))
+            await self.safe_dm(
+                member,
+                make_embed(
+                    "Ban",
+                    f"You have been banned from **{guild.name}**.\n\nReason: {reason}",
+                    discord.Color.dark_red(),
+                ),
+            )
+            await guild.ban(member, reason=reason, delete_message_seconds=delete_days * 86400)
+            embed = self.create_modlog_embed("BAN", member, actor, reason)
+            if delete_days:
+                embed.add_field(name="Deleted Messages", value=f"{delete_days} day(s)", inline=False)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("BAN", member, actor, reason)
+            return f"Banned {member.display_name}."
+        if action_type == "unban_user":
+            member_id = int(payload.get("member_id", 0) or 0)
+            target = discord.Object(id=member_id)
+            try:
+                ban_entry = await guild.fetch_ban(target)
+            except discord.NotFound as exc:
+                raise RuntimeError("That user is not banned.") from exc
+            reason = str(payload.get("reason") or "No reason provided")
+            await guild.unban(ban_entry.user, reason=reason)
+            embed = self.create_modlog_embed("UNBAN", ban_entry.user, actor, reason)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("UNBAN", ban_entry.user, actor, reason)
+            return f"Unbanned {ban_entry.user}."
+        if action_type == "add_member_role":
+            member_id = int(payload.get("member_id", 0) or 0)
+            role_id = int(payload.get("role_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            role = self.resolve_dashboard_action_role(guild, role_id)
+            if role in member.roles:
+                raise RuntimeError(f"{member.display_name} already has {role.name}.")
+            reason = str(payload.get("reason") or "No reason provided")
+            await member.add_roles(role, reason=f"{reason} | Added from dashboard by {actor} ({actor.id})")
+            embed = self.create_modlog_embed("ROLE ADD", member, actor, reason)
+            embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("ROLE ADD", member, actor, f"{reason} | Role: {role.name}")
+            return f"Added {role.name} to {member.display_name}."
+        if action_type == "remove_member_role":
+            member_id = int(payload.get("member_id", 0) or 0)
+            role_id = int(payload.get("role_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            role = self.resolve_dashboard_action_role(guild, role_id)
+            if role not in member.roles:
+                raise RuntimeError(f"{member.display_name} does not have {role.name}.")
+            reason = str(payload.get("reason") or "No reason provided")
+            await member.remove_roles(role, reason=f"{reason} | Removed from dashboard by {actor} ({actor.id})")
+            embed = self.create_modlog_embed("ROLE REMOVE", member, actor, reason)
+            embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("ROLE REMOVE", member, actor, f"{reason} | Role: {role.name}")
+            return f"Removed {role.name} from {member.display_name}."
+        if action_type == "clear_messages":
+            assert target_channel is not None
+            amount = max(1, min(1000, int(payload.get("amount", 0) or 0)))
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id) if member_id > 0 else None
+            remaining = amount
+
+            def should_delete(message: discord.Message) -> bool:
+                nonlocal remaining
+                if remaining <= 0:
+                    return False
+                if member is not None and message.author.id != member.id:
+                    return False
+                if (utc_now() - message.created_at) >= timedelta(days=14):
+                    return False
+                remaining -= 1
+                return True
+
+            deleted = await target_channel.purge(limit=min(1000, amount + 200), check=should_delete, bulk=True)
+            target = member or actor
+            embed = self.create_modlog_embed("CLEAR", target, actor, f"Cleared {len(deleted)} message(s)")
+            await self.send_modlog(embed, guild)
+            await self.add_modlog("CLEAR", target, actor, f"Cleared {len(deleted)} message(s)")
+            return f"Deleted {len(deleted)} message(s) in {target_channel.mention}."
+        if action_type == "autoreact_activate":
+            assert target_channel is not None
+            emoji_text = str(payload.get("emojis") or "").strip()
+            normalized_emojis = self.parse_autoreact_emojis(emoji_text)
+            if not normalized_emojis:
+                raise RuntimeError("Please provide one or more valid emojis.")
+            channel_configs = self.get_persisted_autoreact_configs(guild.id)
+            config = channel_configs.setdefault(target_channel.id, AutoReactionConfig())
+            added_emojis = [item for item in normalized_emojis if item not in config.emojis]
+            if not added_emojis:
+                raise RuntimeError(f"Those emojis are already active in {target_channel.mention}.")
+            config.emojis.extend(added_emojis)
+            await self.persist_autoreact_data()
+            return f"Auto-reaction updated in {target_channel.mention}. Active emojis: {' '.join(config.emojis)}."
+        if action_type == "autoreact_deactivate":
+            assert target_channel is not None
+            channel_configs = self.get_persisted_autoreact_configs(guild.id)
+            if target_channel.id not in channel_configs:
+                raise RuntimeError(f"Slash-command auto-reaction is not active in {target_channel.mention}.")
+            channel_configs.pop(target_channel.id, None)
+            await self.persist_autoreact_data()
+            return f"Auto-reaction deactivated in {target_channel.mention}."
         if action_type == "send_custom_embed":
+            assert target_channel is not None
             message_content = self.resolve_embed_references(guild, str(payload.get("message_content") or "").strip())
             embed_title = self.resolve_embed_references(guild, str(payload.get("embed_title") or "").strip())
             embed_description = self.resolve_embed_references(guild, str(payload.get("embed_description") or "").strip())

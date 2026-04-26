@@ -68,6 +68,50 @@
             <span class="pill">Needs member</span>
         </div>
     </div>
+    {% elif message == "action_needs_role" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Role Required</span>
+                <h2>Pick a role for this action</h2>
+                <p>Role-management actions need a target role ID or role mention.</p>
+            </div>
+            <span class="pill">Needs role</span>
+        </div>
+    </div>
+    {% elif message == "action_needs_duration" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Duration Required</span>
+                <h2>Add a timeout duration first</h2>
+                <p>Timeout actions need a duration like `10m`, `1h`, or `1d` before they can be queued.</p>
+            </div>
+            <span class="pill">Needs duration</span>
+        </div>
+    </div>
+    {% elif message == "action_needs_amount" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Amount Required</span>
+                <h2>Choose how many messages to clear</h2>
+                <p>Bulk-clear actions need a positive message amount before they can be queued.</p>
+            </div>
+            <span class="pill">Needs amount</span>
+        </div>
+    </div>
+    {% elif message == "action_needs_emoji" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Emoji Required</span>
+                <h2>Add one or more emojis first</h2>
+                <p>Auto-reaction activation needs at least one emoji, such as `🔥, ✅, 👀`.</p>
+            </div>
+            <span class="pill">Needs emoji</span>
+        </div>
+    </div>
     {% elif message == "action_needs_embed_content" %}
     <div class="card status-banner warn-banner">
         <div class="split-row">
@@ -411,13 +455,13 @@
             <div class="card stack">
                 <div>
                     <span class="section-kicker">Bot Controls</span>
-                    <h2>Queue bot actions</h2>
-                    <p>Send operational posts and refresh actions through PostgreSQL without opening Discord slash commands.</p>
+                    <h2 id="website-actions">Run bot actions from the website</h2>
+                    <p>Queue the same moderation, analytics, role, and automation actions your slash commands already support.</p>
                 </div>
                 <form method="post" action="/dashboard/{{ guild.id }}/actions" class="stack">
                     <label class="field">
                         <span class="field-label"><span class="field-icon">AT</span>Action Type</span>
-                        <span class="field-copy">Posting actions need a text channel. Rank-card and invite-stat posts also need a member ID or mention.</span>
+                        <span class="field-copy">Choose the command you want the bot to run. Some actions need channel, member, role, emoji, duration, or amount inputs below.</span>
                         <select name="action_type">
                             {% for option in action_options %}
                             <option value="{{ option.value }}">{{ option.label }}</option>
@@ -426,15 +470,52 @@
                     </label>
                     <label class="field">
                         <span class="field-label"><span class="field-icon">ID</span>Target Channel ID</span>
-                        <span class="field-copy">Used for panel-posting actions. You can leave this blank for non-channel actions.</span>
+                        <span class="field-copy">Used for posting, purge, and auto-reaction actions. You can use a raw ID or channel mention.</span>
                         <input type="text" name="action_channel_id" placeholder="123456789012345678">
                     </label>
                     <label class="field">
                         <span class="field-label"><span class="field-icon">MB</span>Target Member ID</span>
-                        <span class="field-copy">Used for rank-card and invite-stat posts. You can use a raw ID or a member mention.</span>
+                        <span class="field-copy">Used for moderation actions, role actions, rank cards, invite stats, and mod log exports.</span>
                         <input type="text" name="action_member_id" placeholder="123456789012345678 or @member">
                     </label>
-                    <button class="primary-button" type="submit">Queue Bot Action</button>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">RL</span>Target Role ID</span>
+                        <span class="field-copy">Used for add-role and remove-role actions. You can use a raw ID or role mention.</span>
+                        <input type="text" name="action_role_id" placeholder="123456789012345678 or @role" list="action-role-options">
+                        <datalist id="action-role-options">
+                            {% for role in roles %}
+                            <option value="{{ role.id }}">{{ role.name }}</option>
+                            {% endfor %}
+                        </datalist>
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">RS</span>Reason</span>
+                        <span class="field-copy">Optional for moderation and role actions. If you leave it blank, the bot uses “No reason provided”.</span>
+                        <textarea name="action_reason" rows="4" placeholder="Optional reason for logs and DMs"></textarea>
+                    </label>
+                    <div class="field-grid compact-grid">
+                        <label class="field">
+                            <span class="field-label"><span class="field-icon">TM</span>Timeout Duration</span>
+                            <span class="field-copy">Required for timeout actions. Examples: `10m`, `1h`, `1d`.</span>
+                            <input type="text" name="action_duration" placeholder="10m">
+                        </label>
+                        <label class="field">
+                            <span class="field-label"><span class="field-icon">BD</span>Ban Delete Days</span>
+                            <span class="field-copy">Optional for bans. Choose `0` to keep message history.</span>
+                            <input type="number" name="action_delete_days" min="0" max="7" value="0">
+                        </label>
+                        <label class="field">
+                            <span class="field-label"><span class="field-icon">CL</span>Clear Amount</span>
+                            <span class="field-copy">Required for bulk clear actions. Maximum `1000` recent messages.</span>
+                            <input type="number" name="action_clear_amount" min="1" max="1000" value="25">
+                        </label>
+                    </div>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">EM</span>Auto-Reaction Emojis</span>
+                        <span class="field-copy">Required for auto-reaction activation. Separate emojis with commas, like `🔥, ✅, 👀`.</span>
+                        <input type="text" name="action_emojis" placeholder="🔥, ✅, 👀">
+                    </label>
+                    <button class="primary-button" type="submit">Queue Website Action</button>
                 </form>
             </div>
 
