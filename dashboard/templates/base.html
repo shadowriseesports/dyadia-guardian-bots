@@ -11,11 +11,11 @@
         <header class="topbar">
             <div class="brand-wrap">
                 <a class="brand-mark" href="/dashboard" aria-label="Dashboard home">
-                    <img src="{{ app_logo_url }}" alt="Dyadia Guardian logo">
+                    <img src="{{ bot_profile.avatar_url if bot_profile else app_logo_url }}" alt="Dyadia Guardian logo">
                 </a>
                 <div>
                     <span class="eyebrow">Operations Console</span>
-                    <a class="brand" href="/dashboard">Dyadia Guardian Dashboard</a>
+                    <a class="brand" href="/dashboard">{{ bot_profile.display_name if bot_profile else "Dyadia Guardian" }} Dashboard</a>
                     <p class="subtitle">Moderation, onboarding, growth, automation, and server operations in one professional workspace.</p>
                 </div>
             </div>

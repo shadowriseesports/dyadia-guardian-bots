@@ -806,6 +806,27 @@ p {
     color: var(--muted);
 }
 
+.info-row.stacked {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.bot-profile-row {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.2rem 0 0.4rem;
+}
+
+.bot-avatar {
+    width: 3.4rem;
+    height: 3.4rem;
+    border-radius: 1rem;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
 .preview-card {
     display: flex;
     flex-direction: column;

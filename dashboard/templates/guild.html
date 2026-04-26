@@ -57,6 +57,28 @@
             <span class="pill">Invalid action</span>
         </div>
     </div>
+    {% elif message == "action_needs_member" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Member Required</span>
+                <h2>Pick a member for this action</h2>
+                <p>Rank-card and invite-stat actions need a target member ID or mention.</p>
+            </div>
+            <span class="pill">Needs member</span>
+        </div>
+    </div>
+    {% elif message == "action_needs_embed_content" %}
+    <div class="card status-banner warn-banner">
+        <div class="split-row">
+            <div>
+                <span class="section-kicker">Embed Content Required</span>
+                <h2>Add message or embed content first</h2>
+                <p>The custom embed action needs message content, embed content, or an image before it can be queued.</p>
+            </div>
+            <span class="pill">Needs content</span>
+        </div>
+    </div>
     {% endif %}
 
     <div class="control-hero card">
@@ -78,6 +100,9 @@
                 <span class="chip">{{ dashboard_summary.enabled_toggles }} systems enabled</span>
                 <span class="chip">{{ audit_entries|length }} audit entries</span>
                 <span class="chip">{{ action_history|length }} recent actions</span>
+                {% if bot_profile %}
+                <span class="chip">Bot: {{ bot_profile.display_name }}</span>
+                {% endif %}
             </div>
         </div>
         <div class="control-hero-side">
@@ -305,6 +330,16 @@
 
         <aside class="settings-side">
             <div class="card stack">
+                {% if bot_profile %}
+                <div class="bot-profile-row">
+                    <img class="bot-avatar" src="{{ bot_profile.avatar_url }}" alt="{{ bot_profile.display_name }} avatar">
+                    <div>
+                        <span class="section-kicker">Bot Profile</span>
+                        <h2>{{ bot_profile.display_name }}</h2>
+                        <p>{{ bot_profile.username }}</p>
+                    </div>
+                </div>
+                {% endif %}
                 <div>
                     <span class="section-kicker">Setup Guide</span>
                     <h2>Before you save</h2>
@@ -337,6 +372,27 @@
 
             <div class="card stack">
                 <div>
+                    <span class="section-kicker">Automation</span>
+                    <h2>Auto-reaction rules</h2>
+                    <p>These are the dashboard-driven auto-reaction rules currently parsed for this guild.</p>
+                </div>
+                <div class="audit-list">
+                    {% for rule in dashboard_summary.autoreact_rules %}
+                    <div class="audit-entry">
+                        <strong>{{ rule.channel_name }}</strong>
+                        <p>{{ rule.emojis }}</p>
+                    </div>
+                    {% else %}
+                    <div class="audit-entry">
+                        <strong>No dashboard auto-reaction rules yet</strong>
+                        <p>Add rules in the Leveling And Auto-Reactions section using `channel_id = emoji, emoji`.</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="card stack">
+                <div>
                     <span class="section-kicker">Preview Cards</span>
                     <h2>How your embeds will feel</h2>
                     <p>Quick content previews based on the settings currently saved.</p>
@@ -355,13 +411,13 @@
             <div class="card stack">
                 <div>
                     <span class="section-kicker">Bot Controls</span>
-                    <h2>Queue a bot action</h2>
-                    <p>Send a safe operational action through PostgreSQL without opening Discord slash commands.</p>
+                    <h2>Queue bot actions</h2>
+                    <p>Send operational posts and refresh actions through PostgreSQL without opening Discord slash commands.</p>
                 </div>
                 <form method="post" action="/dashboard/{{ guild.id }}/actions" class="stack">
                     <label class="field">
                         <span class="field-label"><span class="field-icon">AT</span>Action Type</span>
-                        <span class="field-copy">Posting panels needs a target channel ID. Refresh and anti-raid actions do not.</span>
+                        <span class="field-copy">Posting actions need a text channel. Rank-card and invite-stat posts also need a member ID or mention.</span>
                         <select name="action_type">
                             {% for option in action_options %}
                             <option value="{{ option.value }}">{{ option.label }}</option>
@@ -373,8 +429,74 @@
                         <span class="field-copy">Used for panel-posting actions. You can leave this blank for non-channel actions.</span>
                         <input type="text" name="action_channel_id" placeholder="123456789012345678">
                     </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">MB</span>Target Member ID</span>
+                        <span class="field-copy">Used for rank-card and invite-stat posts. You can use a raw ID or a member mention.</span>
+                        <input type="text" name="action_member_id" placeholder="123456789012345678 or @member">
+                    </label>
                     <button class="primary-button" type="submit">Queue Bot Action</button>
                 </form>
+            </div>
+
+            <div class="card stack">
+                <div>
+                    <span class="section-kicker">Embed Composer</span>
+                    <h2>Send a custom embed</h2>
+                    <p>Use the same bot identity to send a custom announcement, update, or branded post into any configured channel.</p>
+                </div>
+                <form method="post" action="/dashboard/{{ guild.id }}/actions" class="stack">
+                    <input type="hidden" name="action_type" value="send_custom_embed">
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">ID</span>Target Channel ID</span>
+                        <span class="field-copy">Required. Use a raw channel ID or channel mention.</span>
+                        <input type="text" name="action_channel_id" placeholder="123456789012345678">
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">MC</span>Message Content</span>
+                        <span class="field-copy">Optional plain message content above the embed.</span>
+                        <textarea name="message_content" rows="4" placeholder="Optional plain text message"></textarea>
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">ET</span>Embed Title</span>
+                        <input type="text" name="embed_title" placeholder="Optional embed title">
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">ED</span>Embed Description</span>
+                        <textarea name="embed_description" rows="5" placeholder="Optional embed description"></textarea>
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">CL</span>Embed Color</span>
+                        <span class="field-copy">Optional hex color like `#5865F2`.</span>
+                        <input type="text" name="embed_color" placeholder="#5865F2">
+                    </label>
+                    <label class="field">
+                        <span class="field-label"><span class="field-icon">IM</span>Image URL</span>
+                        <input type="text" name="embed_image_url" placeholder="https://example.com/image.png">
+                    </label>
+                    <button class="primary-button" type="submit">Queue Custom Embed</button>
+                </form>
+            </div>
+
+            <div class="card stack">
+                <div>
+                    <span class="section-kicker">Feature Coverage</span>
+                    <h2>What the dashboard controls</h2>
+                    <p>The dashboard now covers the bot features that are safe to run through queued operations and stored settings.</p>
+                </div>
+                <div class="info-list">
+                    {% for item in dashboard_summary.feature_coverage.dashboard_supported %}
+                    <div class="info-row stacked">
+                        <strong>Dashboard supported</strong>
+                        <span>{{ item }}</span>
+                    </div>
+                    {% endfor %}
+                    {% for item in dashboard_summary.feature_coverage.discord_runtime %}
+                    <div class="info-row stacked">
+                        <strong>Discord runtime</strong>
+                        <span>{{ item }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
 
             <div class="card stack">

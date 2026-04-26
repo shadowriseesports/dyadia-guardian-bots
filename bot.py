@@ -866,87 +866,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         @tree.command(name="help", description="Show the available moderation and modmail commands")
         async def help_command(interaction: discord.Interaction) -> None:
-            embed = discord.Embed(
-                title="Dyadia Guardian Help",
-                description="Moderation and modmail tools available in this server.",
-                color=discord.Color.blurple(),
-                timestamp=utc_now(),
-            )
-            embed.add_field(
-                name="Moderation",
-                value=(
-                    "`/warn` warn a member\n"
-                    "`/mute` timeout a member\n"
-                    "`/kick` kick a member\n"
-                    "`/ban` ban a member\n"
-                    "`/unban` unban by user ID\n"
-                    "`/addrole` add a role to a member\n"
-                    "`/removerole` remove a role from a member\n"
-                    "`/clear` bulk delete messages\n"
-                    "`/modlogs` view in-memory moderation history"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Modmail",
-                value="DM the bot and press `Open Modmail`. Staff can close active threads with the `Close Modmail` button.",
-                inline=False,
-            )
-            embed.add_field(
-                name="Staff Application",
-                value=(
-                    "`/staffapplypanel` post the staff application button panel\n"
-                    "Members can press the role button to start the 2-page application form"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Verification",
-                value="`/verificationpanel` post the HOK Dyadia verification panel.",
-                inline=False,
-            )
-            embed.add_field(
-                name="Anti-Raid",
-                value=(
-                    "`/antiraid status` show protection status\n"
-                    "`/antiraid on` or `/antiraid off` enable or disable monitoring\n"
-                    "`/antiraid activate` or `/antiraid deactivate` control raid mode manually"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Leveling",
-                value=(
-                    "`/rank` view your level card\n"
-                    "`/leaderboard` view the top XP members\n"
-                    "`/levelpanel` post the leveling system information panel\n"
-                    "`/invites` view invite count\n"
-                    "`/inviteleaderboard` view top inviters"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Embeds",
-                value="`/embed` open a modal to build and send an embed message.",
-                inline=False,
-            )
-            embed.add_field(
-                name="Auto-Reactions",
-                value=(
-                    "`/autoreact activate` react to every message in a channel\n"
-                    "`/autoreact deactivate` turn off auto-reactions in a channel"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Instagram",
-                value=(
-                    "`/instagramstatus` show Instagram notifier settings and health\n"
-                    "`/instagramcheck` poll the configured Instagram feed right now"
-                ),
-                inline=False,
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=self.create_help_embed(), ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
         @app_commands.describe(user="Member to warn", reason="Reason for the warning")
@@ -2656,6 +2576,123 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Next Rank Reward", value=next_reward or "Top rank reached", inline=True)
         return embed
 
+    def create_help_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="Dyadia Guardian Help",
+            description="Moderation and modmail tools available in this server.",
+            color=discord.Color.blurple(),
+            timestamp=utc_now(),
+        )
+        embed.add_field(
+            name="Moderation",
+            value=(
+                "`/warn` warn a member\n"
+                "`/mute` timeout a member\n"
+                "`/kick` kick a member\n"
+                "`/ban` ban a member\n"
+                "`/unban` unban by user ID\n"
+                "`/addrole` add a role to a member\n"
+                "`/removerole` remove a role from a member\n"
+                "`/clear` bulk delete messages\n"
+                "`/modlogs` view in-memory moderation history"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Modmail",
+            value="DM the bot and press `Open Modmail`. Staff can close active threads with the `Close Modmail` button.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Staff Application",
+            value=(
+                "`/staffapplypanel` post the staff application button panel\n"
+                "Members can press the role button to start the 2-page application form"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Verification",
+            value="`/verificationpanel` post the HOK Dyadia verification panel.",
+            inline=False,
+        )
+        embed.add_field(
+            name="Anti-Raid",
+            value=(
+                "`/antiraid status` show protection status\n"
+                "`/antiraid on` or `/antiraid off` enable or disable monitoring\n"
+                "`/antiraid activate` or `/antiraid deactivate` control raid mode manually"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Leveling",
+            value=(
+                "`/rank` view your level card\n"
+                "`/leaderboard` view the top XP members\n"
+                "`/levelpanel` post the leveling system information panel\n"
+                "`/invites` view invite count\n"
+                "`/inviteleaderboard` view top inviters"
+            ),
+            inline=False,
+        )
+        embed.add_field(name="Embeds", value="`/embed` open a modal to build and send an embed message.", inline=False)
+        embed.add_field(
+            name="Auto-Reactions",
+            value=(
+                "`/autoreact activate` react to every message in a channel\n"
+                "`/autoreact deactivate` turn off auto-reactions in a channel"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Instagram",
+            value=(
+                "`/instagramstatus` show Instagram notifier settings and health\n"
+                "`/instagramcheck` poll the configured Instagram feed right now"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text=BRAND_FOOTER)
+        embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
+        return embed
+
+    def create_leveling_leaderboard_embed(self, guild: discord.Guild) -> Optional[discord.Embed]:
+        guild_progress = self.level_data.get(guild.id, {})
+        ranked_members = sorted(guild_progress.items(), key=lambda item: item[1].xp, reverse=True)[:LEADERBOARD_LIMIT]
+        if not ranked_members:
+            return None
+
+        lines = []
+        for index, (user_id, progress) in enumerate(ranked_members, start=1):
+            member = guild.get_member(user_id)
+            display_name = member.display_name if member is not None else f"User {user_id}"
+            lines.append(
+                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.get_guild_settings(guild.id).level_xp_increment)} ({progress.xp} XP)"
+            )
+        return make_embed("Leveling Leaderboard", "\n".join(lines), discord.Color.gold())
+
+    def create_invite_count_embed(self, guild: discord.Guild, member: discord.Member) -> discord.Embed:
+        invite_count = self.get_invite_count(guild.id, member.id)
+        return make_embed(
+            "Invite Count",
+            f"{member.mention} has invited **{invite_count}** member{'s' if invite_count != 1 else ''}.",
+            discord.Color.blurple(),
+        )
+
+    def create_invite_leaderboard_embed(self, guild: discord.Guild) -> Optional[discord.Embed]:
+        guild_counts = self.invite_counts.get(guild.id, {})
+        ranked_inviters = sorted(guild_counts.items(), key=lambda item: item[1], reverse=True)[:LEADERBOARD_LIMIT]
+        if not ranked_inviters:
+            return None
+
+        lines = []
+        for index, (user_id, joins) in enumerate(ranked_inviters, start=1):
+            member = guild.get_member(user_id)
+            display_name = member.display_name if member is not None else f"User {user_id}"
+            lines.append(f"**#{index}** {display_name} - {joins} invite{'s' if joins != 1 else ''}")
+        return make_embed("Invite Leaderboard", "\n".join(lines), discord.Color.gold())
+
     async def ensure_staff(self, interaction: discord.Interaction, permission: str) -> bool:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if member is None or not self.has_staff_access(member, permission):
@@ -2692,11 +2729,22 @@ class DyadiaGuardianBot(commands.Bot):
                 parsed_emojis.append(emoji)
         return parsed_emojis
 
-    def get_autoreact_configs(self, guild_id: int) -> Dict[int, AutoReactionConfig]:
-        dashboard_configs = self.dashboard_autoreact_configs.get(guild_id)
-        if dashboard_configs:
-            return dashboard_configs
+    def get_persisted_autoreact_configs(self, guild_id: int) -> Dict[int, AutoReactionConfig]:
         return self.autoreact_configs.setdefault(guild_id, {})
+
+    def get_autoreact_configs(self, guild_id: int) -> Dict[int, AutoReactionConfig]:
+        merged: Dict[int, AutoReactionConfig] = {}
+
+        for channel_id, config in self.get_persisted_autoreact_configs(guild_id).items():
+            merged[channel_id] = AutoReactionConfig(emojis=list(config.emojis))
+
+        for channel_id, config in self.dashboard_autoreact_configs.get(guild_id, {}).items():
+            current = merged.setdefault(channel_id, AutoReactionConfig(emojis=[]))
+            for emoji in config.emojis:
+                if emoji not in current.emojis:
+                    current.emojis.append(emoji)
+
+        return merged
 
     def create_autoreact_embed(self, guild: discord.Guild) -> discord.Embed:
         channel_configs = self.get_autoreact_configs(guild.id)
@@ -3254,25 +3302,10 @@ class DyadiaGuardianBot(commands.Bot):
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
 
-        guild_progress = self.level_data.get(interaction.guild.id, {})
-        ranked_members = sorted(guild_progress.items(), key=lambda item: item[1].xp, reverse=True)[:LEADERBOARD_LIMIT]
-        if not ranked_members:
+        embed = self.create_leveling_leaderboard_embed(interaction.guild)
+        if embed is None:
             await interaction.response.send_message("Nobody has earned XP yet.", ephemeral=True)
             return
-
-        lines = []
-        for index, (user_id, progress) in enumerate(ranked_members, start=1):
-            member = interaction.guild.get_member(user_id)
-            display_name = member.display_name if member is not None else f"User {user_id}"
-            lines.append(
-                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.get_guild_settings(interaction.guild.id).level_xp_increment)} ({progress.xp} XP)"
-            )
-
-        embed = make_embed(
-            "Leveling Leaderboard",
-            "\n".join(lines),
-            discord.Color.gold(),
-        )
         await interaction.response.send_message(embed=embed)
 
     async def handle_invites(self, interaction: discord.Interaction, user: Optional[discord.Member]) -> None:
@@ -3285,36 +3318,17 @@ class DyadiaGuardianBot(commands.Bot):
             await interaction.response.send_message("I could not resolve that member in this server.", ephemeral=True)
             return
 
-        invite_count = self.get_invite_count(interaction.guild.id, target.id)
-        embed = make_embed(
-            "Invite Count",
-            f"{target.mention} has invited **{invite_count}** member{'s' if invite_count != 1 else ''}.",
-            discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=self.create_invite_count_embed(interaction.guild, target), ephemeral=True)
 
     async def handle_invite_leaderboard(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
             return
 
-        guild_counts = self.invite_counts.get(interaction.guild.id, {})
-        ranked_inviters = sorted(guild_counts.items(), key=lambda item: item[1], reverse=True)[:LEADERBOARD_LIMIT]
-        if not ranked_inviters:
+        embed = self.create_invite_leaderboard_embed(interaction.guild)
+        if embed is None:
             await interaction.response.send_message("No tracked invite joins yet.", ephemeral=True)
             return
-
-        lines = []
-        for index, (user_id, joins) in enumerate(ranked_inviters, start=1):
-            member = interaction.guild.get_member(user_id)
-            display_name = member.display_name if member is not None else f"User {user_id}"
-            lines.append(f"**#{index}** {display_name} - {joins} invite{'s' if joins != 1 else ''}")
-
-        embed = make_embed(
-            "Invite Leaderboard",
-            "\n".join(lines),
-            discord.Color.gold(),
-        )
         await interaction.response.send_message(embed=embed)
 
     async def handle_level_panel(
@@ -3370,7 +3384,7 @@ class DyadiaGuardianBot(commands.Bot):
                 await interaction.response.send_message("Please choose a text channel for auto-reaction.", ephemeral=True)
                 return
 
-        channel_configs = self.get_autoreact_configs(interaction.guild.id)
+        channel_configs = self.get_persisted_autoreact_configs(interaction.guild.id)
         config = channel_configs.setdefault(target_channel.id, AutoReactionConfig())
         added_emojis = [item for item in normalized_emojis if item not in config.emojis]
         if not added_emojis:
@@ -3406,10 +3420,10 @@ class DyadiaGuardianBot(commands.Bot):
                 await interaction.response.send_message("Please choose a text channel to deactivate.", ephemeral=True)
                 return
 
-        channel_configs = self.get_autoreact_configs(interaction.guild.id)
+        channel_configs = self.get_persisted_autoreact_configs(interaction.guild.id)
         if target_channel.id not in channel_configs:
             await interaction.response.send_message(
-                f"Auto-reaction is not active in {target_channel.mention}.",
+                f"Slash-command auto-reaction is not active in {target_channel.mention}. Dashboard rules for that channel may still be active.",
                 ephemeral=True,
             )
             return
@@ -4272,6 +4286,12 @@ class DyadiaGuardianBot(commands.Bot):
             raise RuntimeError(f"Channel {channel_id} is not a text channel.")
         return channel
 
+    def resolve_dashboard_action_member(self, guild: discord.Guild, member_id: int) -> discord.Member:
+        member = guild.get_member(member_id)
+        if member is None:
+            raise RuntimeError(f"I could not resolve member {member_id} in guild {guild.id}.")
+        return member
+
     async def execute_dashboard_action(self, action: Dict[str, Any]) -> str:
         guild_id = int(action["guild_id"])
         action_type = str(action["action_type"])
@@ -4321,6 +4341,70 @@ class DyadiaGuardianBot(commands.Bot):
         if action_type == "post_level_panel":
             await target_channel.send(embed=self.create_leveling_panel_embed(guild))
             return f"Leveling panel posted in {target_channel.mention}."
+        if action_type == "post_help":
+            await target_channel.send(embed=self.create_help_embed())
+            return f"Help overview posted in {target_channel.mention}."
+        if action_type == "post_autoreact_summary":
+            await target_channel.send(embed=self.create_autoreact_embed(guild))
+            return f"Auto-reaction summary posted in {target_channel.mention}."
+        if action_type == "post_instagram_status":
+            channel = await self.get_instagram_notification_channel()
+            await target_channel.send(embed=self.create_instagram_status_embed(channel))
+            return f"Instagram status posted in {target_channel.mention}."
+        if action_type == "post_antiraid_status":
+            state = self.get_anti_raid_state(guild.id)
+            await target_channel.send(embed=self.create_anti_raid_status_embed(guild, state))
+            return f"Anti-raid status posted in {target_channel.mention}."
+        if action_type == "post_level_leaderboard":
+            embed = self.create_leveling_leaderboard_embed(guild)
+            if embed is None:
+                raise RuntimeError("Nobody has earned XP yet in this guild.")
+            await target_channel.send(embed=embed)
+            return f"Level leaderboard posted in {target_channel.mention}."
+        if action_type == "post_invite_leaderboard":
+            embed = self.create_invite_leaderboard_embed(guild)
+            if embed is None:
+                raise RuntimeError("No tracked invite joins are available yet in this guild.")
+            await target_channel.send(embed=embed)
+            return f"Invite leaderboard posted in {target_channel.mention}."
+        if action_type == "post_rank_card":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            await target_channel.send(embed=self.create_rank_embed(member))
+            return f"Rank card posted for {member.display_name} in {target_channel.mention}."
+        if action_type == "post_invite_stats":
+            member_id = int(payload.get("member_id", 0) or 0)
+            member = self.resolve_dashboard_action_member(guild, member_id)
+            await target_channel.send(embed=self.create_invite_count_embed(guild, member))
+            return f"Invite stats posted for {member.display_name} in {target_channel.mention}."
+        if action_type == "send_custom_embed":
+            message_content = self.resolve_embed_references(guild, str(payload.get("message_content") or "").strip())
+            embed_title = self.resolve_embed_references(guild, str(payload.get("embed_title") or "").strip())
+            embed_description = self.resolve_embed_references(guild, str(payload.get("embed_description") or "").strip())
+            embed_color_raw = str(payload.get("embed_color") or "").strip()
+            embed_image_url = str(payload.get("embed_image_url") or "").strip()
+
+            send_kwargs: Dict[str, Any] = {}
+            if message_content:
+                send_kwargs["content"] = message_content
+
+            if embed_title or embed_description or embed_image_url:
+                embed = discord.Embed(
+                    title=embed_title or None,
+                    description=embed_description or None,
+                    color=parse_embed_color(embed_color_raw) or discord.Color.blurple(),
+                    timestamp=utc_now(),
+                )
+                embed.set_footer(text=BRAND_FOOTER)
+                if embed_image_url:
+                    embed.set_image(url=embed_image_url)
+                send_kwargs["embed"] = embed
+
+            if not send_kwargs:
+                raise RuntimeError("Custom embed action needs some content or embed fields.")
+
+            await target_channel.send(**send_kwargs)
+            return f"Custom embed sent in {target_channel.mention}."
 
         raise RuntimeError(f"Unsupported dashboard action: {action_type}")
 

@@ -81,11 +81,21 @@ ACTION_OPTIONS = [
     {"value": "post_staff_panel", "label": "Post Staff Panel", "needs_channel": True},
     {"value": "post_verification_panel", "label": "Post Verification Panel", "needs_channel": True},
     {"value": "post_level_panel", "label": "Post Level Panel", "needs_channel": True},
+    {"value": "post_help", "label": "Post Help Overview", "needs_channel": True},
+    {"value": "post_autoreact_summary", "label": "Post Auto-Reaction Summary", "needs_channel": True},
+    {"value": "post_instagram_status", "label": "Post Instagram Status", "needs_channel": True},
+    {"value": "post_antiraid_status", "label": "Post Anti-Raid Status", "needs_channel": True},
+    {"value": "post_level_leaderboard", "label": "Post Level Leaderboard", "needs_channel": True},
+    {"value": "post_invite_leaderboard", "label": "Post Invite Leaderboard", "needs_channel": True},
+    {"value": "post_rank_card", "label": "Post Rank Card", "needs_channel": True, "needs_member": True},
+    {"value": "post_invite_stats", "label": "Post Invite Stats", "needs_channel": True, "needs_member": True},
     {"value": "run_instagram_check", "label": "Run Instagram Check", "needs_channel": False},
     {"value": "refresh_settings", "label": "Refresh Bot Cache", "needs_channel": False},
     {"value": "antiraid_activate", "label": "Activate Anti-Raid", "needs_channel": False},
     {"value": "antiraid_deactivate", "label": "Deactivate Anti-Raid", "needs_channel": False},
+    {"value": "send_custom_embed", "label": "Send Custom Embed", "needs_channel": True},
 ]
+ACTION_OPTION_MAP = {str(option["value"]): option for option in ACTION_OPTIONS}
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -205,6 +215,30 @@ async def fetch_bot_resources(guild_id: int, settings: DashboardSettings) -> Dic
         "channels": text_channels,
         "forum_channels": forum_channels,
         "roles": roles_sorted,
+    }
+
+
+async def fetch_bot_profile(settings: DashboardSettings) -> Optional[Dict[str, str]]:
+    if not settings.bot_api_token:
+        return None
+    try:
+        payload = await discord_request(f"{DISCORD_API_BASE}/users/@me", bot_token=settings.bot_api_token)
+    except Exception:
+        return None
+
+    bot_id = str(payload.get("id") or "").strip()
+    avatar_hash = str(payload.get("avatar") or "").strip()
+    avatar_url = DEFAULT_APP_LOGO_URL
+    if bot_id and avatar_hash:
+        extension = "gif" if avatar_hash.startswith("a_") else "png"
+        avatar_url = f"https://cdn.discordapp.com/avatars/{bot_id}/{avatar_hash}.{extension}?size=256"
+
+    display_name = str(payload.get("global_name") or payload.get("username") or "Dyadia Guardian").strip() or "Dyadia Guardian"
+    return {
+        "id": bot_id,
+        "username": str(payload.get("username") or display_name),
+        "display_name": display_name,
+        "avatar_url": avatar_url,
     }
 
 
@@ -451,6 +485,51 @@ def build_resource_highlights(guild_settings: GuildSettings, resources: Dict[str
     ]
 
 
+def parse_dashboard_autoreact_rules(value: str, resources: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    parsed: List[Dict[str, str]] = []
+    channels = resources["channels"]
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        raw_channel, raw_emojis = line.split("=", 1)
+        channel_text = raw_channel.strip()
+        if channel_text.startswith("<#") and channel_text.endswith(">"):
+            channel_text = channel_text[2:-1]
+        if not channel_text.isdigit():
+            continue
+        channel_id = int(channel_text)
+        emoji_parts = [part.strip() for part in raw_emojis.split(",") if part.strip()]
+        if channel_id > 0 and emoji_parts:
+            parsed.append(
+                {
+                    "channel_id": str(channel_id),
+                    "channel_name": resolve_resource_name(channels, channel_id, "Channel"),
+                    "emojis": " ".join(emoji_parts),
+                }
+            )
+    return parsed
+
+
+def build_feature_coverage() -> Dict[str, List[str]]:
+    return {
+        "dashboard_supported": [
+            "Panel posting for staff applications, verification, and leveling",
+            "Auto-reaction rules through dashboard settings",
+            "Instagram checks, status posting, and notifier configuration",
+            "Anti-raid toggles, status posting, and threshold configuration",
+            "Rank card, invite stats, and leaderboard posting through queued bot actions",
+            "Custom embed sending and bot cache refresh",
+        ],
+        "discord_runtime": [
+            "Interactive slash-command moderation like warn, mute, kick, ban, unban, and bulk clear",
+            "Live modmail conversations and close actions",
+            "Verification button presses and staff application submissions",
+            "Ephemeral one-off responses such as /rank or /modlogs directly to staff members",
+        ],
+    }
+
+
 def build_dashboard_summary(
     guild: Dict[str, Any],
     guild_settings: GuildSettings,
@@ -464,6 +543,7 @@ def build_dashboard_summary(
     configured_roles = sum(1 for key in ROLE_SETTING_FIELDS if int(settings_payload.get(key, 0) or 0) > 0)
     configured_text = sum(1 for key in TEXT_SETTING_FIELDS if is_nonempty_setting(settings_payload.get(key)))
     progress_items = build_setup_checklist(guild_settings)
+    autoreact_rules = parse_dashboard_autoreact_rules(guild_settings.auto_react_rules, resources)
     completed_items = sum(1 for item in progress_items if item["done"])
     readiness_score = int(round((completed_items / len(progress_items)) * 100)) if progress_items else 0
 
@@ -501,6 +581,9 @@ def build_dashboard_summary(
         "last_action_time": format_timestamp(latest_action["created_at"]) if latest_action else "No actions yet",
         "system_cards": build_system_cards(guild_settings),
         "resource_highlights": build_resource_highlights(guild_settings, resources),
+        "autoreact_rules": autoreact_rules,
+        "autoreact_rule_count": len(autoreact_rules),
+        "feature_coverage": build_feature_coverage(),
         "stats": [
             {"label": "Readiness score", "value": f"{readiness_score}%"},
             {"label": "Systems enabled", "value": f"{enabled_toggles}/{len(BOOLEAN_FIELDS)}"},
@@ -555,6 +638,59 @@ def normalize_channel_id(raw_value: Any) -> int:
     return int(cleaned) if cleaned.isdigit() else 0
 
 
+def normalize_user_id(raw_value: Any) -> int:
+    cleaned = str(raw_value or "").strip()
+    if not cleaned:
+        return 0
+    if cleaned.startswith("<@") and cleaned.endswith(">"):
+        cleaned = cleaned[2:-1].lstrip("!")
+    return int(cleaned) if cleaned.isdigit() else 0
+
+
+def normalize_optional_text(value: Any, *, limit: int = 2000) -> str:
+    cleaned = str(value or "").strip()
+    return cleaned[:limit]
+
+
+def build_action_payload(form: Dict[str, Any], action_type: str) -> Dict[str, Any]:
+    option = ACTION_OPTION_MAP[action_type]
+    payload: Dict[str, Any] = {}
+
+    channel_id = normalize_channel_id(form.get("action_channel_id"))
+    if option.get("needs_channel") and channel_id <= 0:
+        raise ValueError("channel")
+    if channel_id > 0:
+        payload["channel_id"] = channel_id
+
+    member_id = normalize_user_id(form.get("action_member_id"))
+    if option.get("needs_member") and member_id <= 0:
+        raise ValueError("member")
+    if member_id > 0:
+        payload["member_id"] = member_id
+
+    if action_type == "send_custom_embed":
+        message_content = normalize_optional_text(form.get("message_content"), limit=2000)
+        embed_title = normalize_optional_text(form.get("embed_title"), limit=256)
+        embed_description = normalize_optional_text(form.get("embed_description"), limit=4000)
+        embed_color = normalize_optional_text(form.get("embed_color"), limit=32)
+        embed_image_url = normalize_optional_text(form.get("embed_image_url"), limit=1200)
+
+        if not any((message_content, embed_title, embed_description, embed_image_url)):
+            raise ValueError("embed_content")
+
+        payload.update(
+            {
+                "message_content": message_content,
+                "embed_title": embed_title,
+                "embed_description": embed_description,
+                "embed_color": embed_color,
+                "embed_image_url": embed_image_url,
+            }
+        )
+
+    return payload
+
+
 def build_guild_icon_url(guild: Dict[str, Any]) -> str:
     guild_id = str(guild.get("id") or "").strip()
     icon_hash = str(guild.get("icon") or "").strip()
@@ -575,6 +711,8 @@ def with_guild_visuals(guilds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request) -> HTMLResponse:
+    settings = get_dashboard_settings()
+    bot_profile = await fetch_bot_profile(settings)
     if "user" not in request.session:
         return render(
             request,
@@ -582,6 +720,7 @@ async def home(request: Request) -> HTMLResponse:
             {
                 "error": request.query_params.get("error", "").strip(),
                 "reason": request.query_params.get("reason", "").strip(),
+                "bot_profile": bot_profile,
             },
         )
     return RedirectResponse("/dashboard", status_code=303)
@@ -644,12 +783,14 @@ async def dashboard(request: Request) -> HTMLResponse:
 
     settings = get_dashboard_settings()
     guilds = await fetch_manageable_guilds(request, settings)
+    bot_profile = await fetch_bot_profile(settings)
     return render(
         request,
         "dashboard.html",
         {
             "guilds": guilds,
             "locked_guild_id": settings.locked_guild_id,
+            "bot_profile": bot_profile,
             "dashboard_stats": [
                 {"label": "Servers ready", "value": str(len(guilds))},
                 {"label": "Access level", "value": "Manage Server"},
@@ -675,6 +816,7 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
     audit_entries = present_audit_entries(load_guild_settings_audit(settings.database_url, guild_id))
     action_history = present_action_history(load_dashboard_actions(settings.database_url, guild_id))
     bot_resources = await fetch_bot_resources(guild_id, settings)
+    bot_profile = await fetch_bot_profile(settings)
     dashboard_summary = build_dashboard_summary(guild, guild_settings, audit_entries, action_history, bot_resources)
     return render(
         request,
@@ -689,6 +831,7 @@ async def dashboard_guild(request: Request, guild_id: int) -> HTMLResponse:
             "text_channels": bot_resources["channels"],
             "forum_channels": bot_resources["forum_channels"],
             "roles": bot_resources["roles"],
+            "bot_profile": bot_profile,
             "dashboard_summary": dashboard_summary,
             "section_nav": SECTION_NAV,
             "message": request.query_params.get("message"),
@@ -759,15 +902,19 @@ async def queue_dashboard_action(request: Request, guild_id: int) -> RedirectRes
 
     form = await request.form()
     action_type = str(form.get("action_type", "")).strip()
-    if action_type not in {option["value"] for option in ACTION_OPTIONS}:
+    if action_type not in ACTION_OPTION_MAP:
         return RedirectResponse(f"/dashboard/{guild_id}?message=invalid_action", status_code=303)
 
-    payload: Dict[str, Any] = {}
-    channel_id = normalize_channel_id(form.get("action_channel_id"))
-    if action_type.startswith("post_") and channel_id <= 0:
-        return RedirectResponse(f"/dashboard/{guild_id}?message=action_needs_channel", status_code=303)
-    if channel_id > 0:
-        payload["channel_id"] = channel_id
+    try:
+        payload = build_action_payload(dict(form), action_type)
+    except ValueError as exc:
+        reason = str(exc)
+        message = {
+            "channel": "action_needs_channel",
+            "member": "action_needs_member",
+            "embed_content": "action_needs_embed_content",
+        }.get(reason, "invalid_action")
+        return RedirectResponse(f"/dashboard/{guild_id}?message={message}", status_code=303)
 
     enqueue_dashboard_action(
         settings.database_url,
