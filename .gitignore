@@ -54,3 +54,6 @@ Thumbs.db
 *.db
 level_data.json
 invite_data.json
+autoreact_data.json
+no_link_channels.json
+instagram_state.json

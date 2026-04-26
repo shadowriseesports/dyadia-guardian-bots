@@ -48,6 +48,7 @@ BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 LEVEL_DATA_PATH = Path("level_data.json")
 INVITE_DATA_PATH = Path("invite_data.json")
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
+NO_LINK_DATA_PATH = Path("no_link_channels.json")
 INSTAGRAM_STATE_PATH = Path("instagram_state.json")
 LEVEL_XP_GAIN_MIN = 15
 LEVEL_XP_GAIN_MAX = 25
@@ -59,6 +60,9 @@ XML_NAMESPACES = {
     "content": "http://purl.org/rss/1.0/modules/content/",
     "media": "http://search.yahoo.com/mrss/",
 }
+URL_RE = re.compile(
+    r"(?i)\b(?:https?://|www\.|discord\.gg/|discord(?:app)?\.com/invite/)\S+"
+)
 LEVEL_REWARD_ROLES = [
     (1, "Battlefield Recruit [lvl 1]"),
     (50, "Rising Warrior [lvl 50]"),
@@ -614,6 +618,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.invite_counts: Dict[int, Dict[int, int]] = {}
         self.invite_cache: Dict[int, Dict[str, InviteSnapshot]] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
+        self.no_link_channels: Dict[int, set[int]] = {}
         self.instagram_seen_ids: set[str] = set()
         self.instagram_seen_order: List[str] = []
         self.instagram_last_checked_at: Optional[datetime] = None
@@ -629,6 +634,7 @@ class DyadiaGuardianBot(commands.Bot):
         await self.load_level_data()
         await self.load_invite_data()
         await self.load_autoreact_data()
+        await self.load_no_link_data()
         await self.load_instagram_state()
         self.register_commands()
         self.add_view(self.modmail_view)
@@ -680,6 +686,10 @@ class DyadiaGuardianBot(commands.Bot):
 
         if message.author.bot:
             return
+
+        if message.guild is not None and isinstance(message.author, discord.Member):
+            if await self.handle_no_link_message(message):
+                return
 
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
@@ -890,6 +900,14 @@ class DyadiaGuardianBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
+                name="No-Link Channels",
+                value=(
+                    "`/nolink activate` delete link messages in a selected channel\n"
+                    "`/nolink deactivate` turn off link blocking in a selected channel"
+                ),
+                inline=False,
+            )
+            embed.add_field(
                 name="Instagram",
                 value=(
                     "`/instagramstatus` show Instagram notifier settings and health\n"
@@ -1048,6 +1066,24 @@ class DyadiaGuardianBot(commands.Bot):
         ) -> None:
             await self.handle_autoreact_deactivate(interaction, channel)
 
+        no_link = app_commands.Group(name="nolink", description="Manage link blocking in channels")
+
+        @no_link.command(name="activate", description="Delete link messages in a channel")
+        @app_commands.describe(channel="Channel where links should be blocked")
+        async def nolink_activate(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_no_link_activate(interaction, channel)
+
+        @no_link.command(name="deactivate", description="Allow links again in a channel")
+        @app_commands.describe(channel="Channel where link blocking should stop")
+        async def nolink_deactivate(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_no_link_deactivate(interaction, channel)
+
         anti_raid = app_commands.Group(name="antiraid", description="Manage anti-raid protection")
 
         @anti_raid.command(name="status", description="Show anti-raid status for this server")
@@ -1072,6 +1108,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         tree.add_command(anti_raid)
         tree.add_command(autoreact)
+        tree.add_command(no_link)
 
     def has_staff_access(self, member: discord.Member, permission: str) -> bool:
         if member.guild_permissions.administrator:
@@ -1963,18 +2000,110 @@ class DyadiaGuardianBot(commands.Bot):
         action: str,
         target: discord.abc.User,
         moderator: discord.abc.User,
+        guild_id: Optional[int],
         reason: str,
         duration_text: Optional[str] = None,
     ) -> None:
-        self.mod_logs.append(
-            ModLogEntry(
-                action=action,
-                user_id=target.id,
-                moderator_id=moderator.id,
-                reason=reason,
-                duration_text=duration_text,
-            )
+        entry = ModLogEntry(
+            action=action,
+            user_id=target.id,
+            moderator_id=moderator.id,
+            reason=reason,
+            duration_text=duration_text,
         )
+        self.mod_logs.append(entry)
+        if self.uses_postgres and guild_id is not None:
+            await asyncio.to_thread(self.persist_modlog, guild_id, entry)
+
+    def persist_modlog(self, guild_id: int, entry: ModLogEntry) -> None:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS mod_logs (
+                            id BIGSERIAL PRIMARY KEY,
+                            guild_id BIGINT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            moderator_id BIGINT NOT NULL,
+                            action TEXT NOT NULL,
+                            reason TEXT NOT NULL,
+                            duration_text TEXT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO mod_logs (
+                            guild_id,
+                            user_id,
+                            moderator_id,
+                            action,
+                            reason,
+                            duration_text,
+                            created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            guild_id,
+                            entry.user_id,
+                            entry.moderator_id,
+                            entry.action,
+                            entry.reason,
+                            entry.duration_text,
+                            entry.created_at,
+                        ),
+                    )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to persist moderation log for guild=%s user=%s", guild_id, entry.user_id)
+
+    def load_modlogs_from_postgres(self, guild_id: int, user_id: int, *, limit: int = 10) -> List[ModLogEntry]:
+        entries: List[ModLogEntry] = []
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS mod_logs (
+                            id BIGSERIAL PRIMARY KEY,
+                            guild_id BIGINT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            moderator_id BIGINT NOT NULL,
+                            action TEXT NOT NULL,
+                            reason TEXT NOT NULL,
+                            duration_text TEXT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        SELECT action, user_id, moderator_id, reason, created_at, duration_text
+                        FROM mod_logs
+                        WHERE guild_id = %s AND user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (guild_id, user_id, limit),
+                    )
+                    for action, row_user_id, moderator_id, reason, created_at, duration_text in cur.fetchall():
+                        entries.append(
+                            ModLogEntry(
+                                action=str(action),
+                                user_id=int(row_user_id),
+                                moderator_id=int(moderator_id),
+                                reason=str(reason),
+                                created_at=created_at if isinstance(created_at, datetime) else utc_now(),
+                                duration_text=str(duration_text) if duration_text else None,
+                            )
+                        )
+        except Exception:
+            LOGGER.exception("Failed to load moderation logs from PostgreSQL for guild=%s user=%s", guild_id, user_id)
+            return []
+        return entries
 
     async def load_invite_data(self) -> None:
         self.invite_counts = await asyncio.to_thread(self._load_invite_data_sync)
@@ -2230,6 +2359,90 @@ class DyadiaGuardianBot(commands.Bot):
                     message.channel.id,
                     message.id,
                 )
+
+    async def load_no_link_data(self) -> None:
+        self.no_link_channels = await asyncio.to_thread(self._load_no_link_data_sync)
+
+    def _load_no_link_data_sync(self) -> Dict[int, set[int]]:
+        loaded_data: Dict[int, set[int]] = {}
+        if not NO_LINK_DATA_PATH.exists():
+            LOGGER.info("No-link data file %s not found. A new one will be created on first activation.", NO_LINK_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(NO_LINK_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load no-link data from %s", NO_LINK_DATA_PATH)
+            return loaded_data
+
+        for guild_id, channels in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(channels, list):
+                continue
+
+            parsed_channels = {
+                int(channel_id)
+                for channel_id in channels
+                if str(channel_id).isdigit() and int(channel_id) > 0
+            }
+            if parsed_channels:
+                loaded_data[parsed_guild_id] = parsed_channels
+
+        LOGGER.info("Loaded no-link channel data for %s guild(s) from %s", len(loaded_data), NO_LINK_DATA_PATH)
+        return loaded_data
+
+    def save_no_link_data(self) -> None:
+        serialized = {
+            str(guild_id): sorted(channel_ids)
+            for guild_id, channel_ids in self.no_link_channels.items()
+            if channel_ids
+        }
+        try:
+            NO_LINK_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save no-link data to %s", NO_LINK_DATA_PATH)
+
+    async def persist_no_link_data(self) -> None:
+        await asyncio.to_thread(self.save_no_link_data)
+
+    def message_contains_blocked_link(self, content: str) -> bool:
+        return bool(URL_RE.search(content))
+
+    async def handle_no_link_message(self, message: discord.Message) -> bool:
+        if message.guild is None or not isinstance(message.channel, discord.TextChannel):
+            return False
+        if message.author.guild_permissions.manage_messages:
+            return False
+
+        blocked_channels = self.no_link_channels.get(message.guild.id, set())
+        if message.channel.id not in blocked_channels:
+            return False
+        if not self.message_contains_blocked_link(message.content):
+            return False
+
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            LOGGER.warning(
+                "Failed to delete blocked link message in guild %s channel %s message %s",
+                message.guild.id,
+                message.channel.id,
+                message.id,
+            )
+            return False
+
+        try:
+            warning = await message.channel.send(
+                f"{message.author.mention} links are not allowed in this channel.",
+                delete_after=8,
+            )
+            LOGGER.debug("Posted no-link warning message %s", warning.id)
+        except discord.HTTPException:
+            LOGGER.warning("Failed to send no-link warning in channel %s", message.channel.id)
+        return True
 
     async def load_level_data(self) -> None:
         self.level_data = await asyncio.to_thread(self._load_level_data_sync)
@@ -2866,7 +3079,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         embed = self.create_modlog_embed("WARN", user, interaction.user, reason)
         await self.send_modlog(embed)
-        await self.add_modlog("WARN", user, interaction.user, reason)
+        await self.add_modlog("WARN", user, interaction.user, interaction.guild.id if interaction.guild else None, reason)
         await self.log_moderator_command(interaction, "/warn", user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2904,7 +3117,14 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("MUTE", user, interaction.user, reason)
         embed.add_field(name="Duration", value=format_duration(duration), inline=False)
         await self.send_modlog(embed)
-        await self.add_modlog("MUTE", user, interaction.user, reason, format_duration(duration))
+        await self.add_modlog(
+            "MUTE",
+            user,
+            interaction.user,
+            interaction.guild.id if interaction.guild else None,
+            reason,
+            format_duration(duration),
+        )
         await self.log_moderator_command(interaction, "/mute", user, f"{reason} | Duration: {format_duration(duration)}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2933,7 +3153,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         embed = self.create_modlog_embed("KICK", user, interaction.user, reason)
         await self.send_modlog(embed)
-        await self.add_modlog("KICK", user, interaction.user, reason)
+        await self.add_modlog("KICK", user, interaction.user, interaction.guild.id if interaction.guild else None, reason)
         await self.log_moderator_command(interaction, "/kick", user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2964,7 +3184,7 @@ class DyadiaGuardianBot(commands.Bot):
         if delete_days:
             embed.add_field(name="Deleted Messages", value=f"{delete_days} day(s)", inline=False)
         await self.send_modlog(embed)
-        await self.add_modlog("BAN", user, interaction.user, reason)
+        await self.add_modlog("BAN", user, interaction.user, interaction.guild.id if interaction.guild else None, reason)
         await self.log_moderator_command(interaction, "/ban", user, f"{reason} | Delete days: {delete_days}")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2986,7 +3206,7 @@ class DyadiaGuardianBot(commands.Bot):
         await interaction.guild.unban(ban_entry.user, reason=reason)
         embed = self.create_modlog_embed("UNBAN", ban_entry.user, interaction.user, reason)
         await self.send_modlog(embed)
-        await self.add_modlog("UNBAN", ban_entry.user, interaction.user, reason)
+        await self.add_modlog("UNBAN", ban_entry.user, interaction.user, interaction.guild.id if interaction.guild else None, reason)
         await self.log_moderator_command(interaction, "/unban", ban_entry.user, reason)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -3016,7 +3236,13 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("ROLE ADD", user, interaction.user, reason)
         embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
         await self.send_modlog(embed)
-        await self.add_modlog("ROLE ADD", user, interaction.user, f"{reason} | Role: {role.name}")
+        await self.add_modlog(
+            "ROLE ADD",
+            user,
+            interaction.user,
+            interaction.guild.id if interaction.guild else None,
+            f"{reason} | Role: {role.name}",
+        )
         await self.log_moderator_command(interaction, "/addrole", user, f"{reason} | Role: {role.name}")
         await interaction.followup.send(f"Added {role.mention} to {user.mention}.", ephemeral=True)
 
@@ -3046,7 +3272,13 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_modlog_embed("ROLE REMOVE", user, interaction.user, reason)
         embed.add_field(name="Role", value=f"{role.mention} ({role.id})", inline=False)
         await self.send_modlog(embed)
-        await self.add_modlog("ROLE REMOVE", user, interaction.user, f"{reason} | Role: {role.name}")
+        await self.add_modlog(
+            "ROLE REMOVE",
+            user,
+            interaction.user,
+            interaction.guild.id if interaction.guild else None,
+            f"{reason} | Role: {role.name}",
+        )
         await self.log_moderator_command(interaction, "/removerole", user, f"{reason} | Role: {role.name}")
         await interaction.followup.send(f"Removed {role.mention} from {user.mention}.", ephemeral=True)
 
@@ -3076,7 +3308,13 @@ class DyadiaGuardianBot(commands.Bot):
         target = user or interaction.user
         embed = self.create_modlog_embed("CLEAR", target, interaction.user, f"Cleared {len(deleted)} message(s)")
         await self.send_modlog(embed)
-        await self.add_modlog("CLEAR", target, interaction.user, f"Cleared {len(deleted)} message(s)")
+        await self.add_modlog(
+            "CLEAR",
+            target,
+            interaction.user,
+            interaction.guild.id if interaction.guild else None,
+            f"Cleared {len(deleted)} message(s)",
+        )
         await self.log_moderator_command(interaction, "/clear", target, f"Cleared {len(deleted)} message(s)")
         await interaction.followup.send(f"Deleted {len(deleted)} message(s).", ephemeral=True)
 
@@ -3084,12 +3322,15 @@ class DyadiaGuardianBot(commands.Bot):
         if not await self.ensure_staff(interaction, "moderate_members"):
             return
 
-        related = [entry for entry in reversed(self.mod_logs) if entry.user_id == user.id][:10]
+        if interaction.guild is not None and self.uses_postgres:
+            related = await asyncio.to_thread(self.load_modlogs_from_postgres, interaction.guild.id, user.id, limit=10)
+        else:
+            related = [entry for entry in reversed(self.mod_logs) if entry.user_id == user.id][:10]
         description = "\n".join(
             f"`{entry.action}` by <@{entry.moderator_id}> - {entry.reason}"
             + (f" ({entry.duration_text})" if entry.duration_text else "")
             for entry in related
-        ) or "No in-memory moderation entries found for this user yet."
+        ) or "No moderation entries found for this user yet."
 
         embed = make_embed(
             "Moderation Logs",
@@ -3279,6 +3520,76 @@ class DyadiaGuardianBot(commands.Bot):
         await self.persist_autoreact_data()
         await interaction.response.send_message(
             f"Auto-reaction deactivated in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def handle_no_link_activate(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel for no-link mode.", ephemeral=True)
+                return
+
+        blocked_channels = self.no_link_channels.setdefault(interaction.guild.id, set())
+        if target_channel.id in blocked_channels:
+            await interaction.response.send_message(
+                f"No-link mode is already active in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        blocked_channels.add(target_channel.id)
+        await self.persist_no_link_data()
+        await interaction.response.send_message(
+            f"No-link mode activated in {target_channel.mention}. Messages containing links will be deleted there.",
+            ephemeral=True,
+        )
+
+    async def handle_no_link_deactivate(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel to disable no-link mode.", ephemeral=True)
+                return
+
+        blocked_channels = self.no_link_channels.setdefault(interaction.guild.id, set())
+        if target_channel.id not in blocked_channels:
+            await interaction.response.send_message(
+                f"No-link mode is not active in {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        blocked_channels.discard(target_channel.id)
+        if not blocked_channels:
+            self.no_link_channels.pop(interaction.guild.id, None)
+        await self.persist_no_link_data()
+        await interaction.response.send_message(
+            f"No-link mode deactivated in {target_channel.mention}.",
             ephemeral=True,
         )
 
@@ -3475,7 +3786,7 @@ class DyadiaGuardianBot(commands.Bot):
         )
         embed = self.create_modlog_embed("ANTI-RAID", member, self.user or member.guild.me or member, reason)
         await self.send_modlog(embed)
-        await self.add_modlog("ANTI-RAID", member, self.user or member.guild.me or member, reason)
+        await self.add_modlog("ANTI-RAID", member, self.user or member.guild.me or member, member.guild.id, reason)
 
     async def handle_antiraid_status(self, interaction: discord.Interaction) -> None:
         if not await self.ensure_staff(interaction, "moderate_members"):
