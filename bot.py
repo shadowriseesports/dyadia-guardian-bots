@@ -1620,27 +1620,43 @@ class DyadiaGuardianBot(commands.Bot):
     async def log_guild_server_stats(self, guild: discord.Guild) -> None:
         channel = await self.get_server_log_channel()
         if channel is None:
+            LOGGER.warning("Skipping server stats for guild %s because no server log channel is available.", guild.id)
             return
 
-        online_members, total_members = await self.fetch_guild_counts(guild)
-        boosters = guild.premium_subscription_count or 0
-        previous_online_members, previous_total_members, previous_boosters = self.previous_server_stats.get(
-            guild.id,
-            (None, None, 0),
-        )
-        embed = self.create_server_stats_embed(
-            guild,
-            previous_online_members,
-            previous_total_members,
-            previous_boosters,
-            online_members,
-            total_members,
-            boosters,
-        )
-        await channel.send(embed=embed)
-        self.previous_server_stats[guild.id] = (online_members, total_members, boosters)
+        LOGGER.info("Sending server stats for guild %s to channel %s", guild.id, channel.id)
+        try:
+            online_members, total_members = await self.fetch_guild_counts(guild)
+            boosters = guild.premium_subscription_count or 0
+            previous_online_members, previous_total_members, previous_boosters = self.previous_server_stats.get(
+                guild.id,
+                (None, None, 0),
+            )
+            embed = self.create_server_stats_embed(
+                guild,
+                previous_online_members,
+                previous_total_members,
+                previous_boosters,
+                online_members,
+                total_members,
+                boosters,
+            )
+            await channel.send(embed=embed)
+            self.previous_server_stats[guild.id] = (online_members, total_members, boosters)
+            LOGGER.info(
+                "Sent server stats for guild %s | before=(online=%s total=%s boosters=%s) after=(online=%s total=%s boosters=%s)",
+                guild.id,
+                previous_online_members,
+                previous_total_members,
+                previous_boosters,
+                online_members,
+                total_members,
+                boosters,
+            )
+        except discord.HTTPException:
+            LOGGER.exception("Failed to send server stats for guild %s to channel %s", guild.id, channel.id)
 
     async def log_all_server_stats(self) -> None:
+        LOGGER.info("Running server stats loop for %s guild(s)", len(self.guilds))
         for guild in self.guilds:
             await self.log_guild_server_stats(guild)
 
