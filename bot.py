@@ -633,6 +633,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_last_success_at: Optional[datetime] = None
         self.instagram_last_error: Optional[str] = None
         self.server_stats_logged_once = False
+        self.previous_server_stats: Dict[int, tuple[Optional[int], Optional[int], int]] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
@@ -1591,22 +1592,29 @@ class DyadiaGuardianBot(commands.Bot):
     def create_server_stats_embed(
         self,
         guild: discord.Guild,
+        previous_online_members: Optional[int],
+        previous_total_members: Optional[int],
+        previous_boosters: int,
         online_members: Optional[int],
         total_members: Optional[int],
+        boosters: int,
     ) -> discord.Embed:
         embed = self.create_server_log_embed("Server Member Stats", discord.Color.blurple())
         embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
         embed.add_field(
-            name="Online Members",
-            value=str(online_members) if online_members is not None else "Unavailable",
+            name="Before Online Members",
+            value=str(previous_online_members) if previous_online_members is not None else "Unavailable",
             inline=True,
         )
         embed.add_field(
-            name="Total Members",
-            value=str(total_members) if total_members is not None else "Unavailable",
+            name="After Online Members",
+            value=str(online_members) if online_members is not None else "Unavailable",
             inline=True,
         )
-        embed.add_field(name="Boosters", value=str(guild.premium_subscription_count or 0), inline=True)
+        embed.add_field(name="Before Total Members", value=str(previous_total_members) if previous_total_members is not None else "Unavailable", inline=True)
+        embed.add_field(name="After Total Members", value=str(total_members) if total_members is not None else "Unavailable", inline=True)
+        embed.add_field(name="Before Boosters", value=str(previous_boosters), inline=True)
+        embed.add_field(name="After Boosters", value=str(boosters), inline=True)
         return embed
 
     async def log_guild_server_stats(self, guild: discord.Guild) -> None:
@@ -1615,8 +1623,22 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         online_members, total_members = await self.fetch_guild_counts(guild)
-        embed = self.create_server_stats_embed(guild, online_members, total_members)
+        boosters = guild.premium_subscription_count or 0
+        previous_online_members, previous_total_members, previous_boosters = self.previous_server_stats.get(
+            guild.id,
+            (None, None, 0),
+        )
+        embed = self.create_server_stats_embed(
+            guild,
+            previous_online_members,
+            previous_total_members,
+            previous_boosters,
+            online_members,
+            total_members,
+            boosters,
+        )
         await channel.send(embed=embed)
+        self.previous_server_stats[guild.id] = (online_members, total_members, boosters)
 
     async def log_all_server_stats(self) -> None:
         for guild in self.guilds:
