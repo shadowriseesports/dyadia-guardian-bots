@@ -632,6 +632,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_last_checked_at: Optional[datetime] = None
         self.instagram_last_success_at: Optional[datetime] = None
         self.instagram_last_error: Optional[str] = None
+        self.server_stats_logged_once = False
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
         self.close_modmail_view = CloseModmailView()
@@ -652,6 +653,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.add_view(self.verification_view)
         self.add_view(self.staff_application_view)
         self.cleanup_inactive_modmail.start()
+        self.server_stats_loop.start()
         self.instagram_feed_loop.change_interval(minutes=self.settings.instagram_poll_minutes)
         if self.instagram_notifications_enabled():
             self.instagram_feed_loop.start()
@@ -697,6 +699,9 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.info("Synced %s application commands", len(synced))
         await self.validate_runtime_configuration()
         await self.refresh_invite_caches()
+        if not self.server_stats_logged_once:
+            self.server_stats_logged_once = True
+            await self.log_all_server_stats()
 
     async def on_app_command_error(
         self,
@@ -1568,6 +1573,54 @@ class DyadiaGuardianBot(commands.Bot):
         embed.set_footer(text=BRAND_FOOTER)
         embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
         return embed
+
+    async def fetch_guild_counts(self, guild: discord.Guild) -> tuple[Optional[int], Optional[int]]:
+        approximate_online: Optional[int] = None
+        approximate_total: Optional[int] = guild.member_count or len(guild.members)
+        try:
+            fetched_guild = await self.fetch_guild(guild.id, with_counts=True)
+        except discord.HTTPException:
+            LOGGER.exception("Could not fetch approximate counts for guild %s", guild.id)
+            return approximate_online, approximate_total
+
+        approximate_online = fetched_guild.approximate_presence_count
+        if fetched_guild.approximate_member_count is not None:
+            approximate_total = fetched_guild.approximate_member_count
+        return approximate_online, approximate_total
+
+    def create_server_stats_embed(
+        self,
+        guild: discord.Guild,
+        online_members: Optional[int],
+        total_members: Optional[int],
+    ) -> discord.Embed:
+        embed = self.create_server_log_embed("Server Member Stats", discord.Color.blurple())
+        embed.add_field(name="Server", value=f"{guild.name} ({guild.id})", inline=False)
+        embed.add_field(
+            name="Online Members",
+            value=str(online_members) if online_members is not None else "Unavailable",
+            inline=True,
+        )
+        embed.add_field(
+            name="Total Members",
+            value=str(total_members) if total_members is not None else "Unavailable",
+            inline=True,
+        )
+        embed.add_field(name="Boosters", value=str(guild.premium_subscription_count or 0), inline=True)
+        return embed
+
+    async def log_guild_server_stats(self, guild: discord.Guild) -> None:
+        channel = await self.get_server_log_channel()
+        if channel is None:
+            return
+
+        online_members, total_members = await self.fetch_guild_counts(guild)
+        embed = self.create_server_stats_embed(guild, online_members, total_members)
+        await channel.send(embed=embed)
+
+    async def log_all_server_stats(self) -> None:
+        for guild in self.guilds:
+            await self.log_guild_server_stats(guild)
 
     async def find_recent_audit_actor(
         self,
@@ -4679,6 +4732,14 @@ class DyadiaGuardianBot(commands.Bot):
 
     @cleanup_inactive_modmail.before_loop
     async def before_cleanup_inactive_modmail(self) -> None:
+        await self.wait_until_ready()
+
+    @tasks.loop(minutes=10)
+    async def server_stats_loop(self) -> None:
+        await self.log_all_server_stats()
+
+    @server_stats_loop.before_loop
+    async def before_server_stats_loop(self) -> None:
         await self.wait_until_ready()
 
     @tasks.loop(minutes=10)
