@@ -617,6 +617,7 @@ class DyadiaGuardianBot(commands.Bot):
         intents.guilds = True
         intents.guild_messages = True
         intents.members = True
+        intents.presences = True
         intents.message_content = True
         intents.dm_messages = True
         intents.voice_states = True
@@ -645,6 +646,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_last_success_at: Optional[datetime] = None
         self.instagram_last_error: Optional[str] = None
         self.server_stats_logged_once = False
+        self.guild_members_chunked: set[int] = set()
         self.previous_server_stats: Dict[int, tuple[Optional[int], Optional[int], int]] = {}
         self.uses_postgres = bool(self.settings.database_url)
         self.modmail_view = OpenModmailView()
@@ -710,11 +712,31 @@ class DyadiaGuardianBot(commands.Bot):
             await self.change_presence(status=discord.Status.idle, activity=activity)
         LOGGER.info("Bot online as %s (%s)", self.user, self.user.id if self.user else "unknown")
         LOGGER.info("Synced %s application commands", len(synced))
+        await self.ensure_guild_member_caches()
         await self.validate_runtime_configuration()
         await self.refresh_invite_caches()
         if not self.server_stats_logged_once:
             self.server_stats_logged_once = True
             await self.log_all_server_stats()
+
+    async def ensure_guild_member_caches(self) -> None:
+        for guild in self.guilds:
+            if guild.id in self.guild_members_chunked:
+                continue
+            expected_members = guild.member_count or 0
+            try:
+                if not guild.chunked or (expected_members and len(guild.members) < expected_members):
+                    await guild.chunk(cache=True)
+                self.guild_members_chunked.add(guild.id)
+                LOGGER.info(
+                    "Guild member cache ready for %s (%s): cached=%s expected=%s",
+                    guild.name,
+                    guild.id,
+                    len(guild.members),
+                    expected_members or "unknown",
+                )
+            except discord.HTTPException:
+                LOGGER.exception("Failed to chunk guild members for %s (%s)", guild.name, guild.id)
 
     async def on_app_command_error(
         self,
@@ -1652,15 +1674,21 @@ class DyadiaGuardianBot(commands.Bot):
         fallback_total: Optional[int],
     ) -> dict[str, int]:
         members = list(guild.members)
-        if members:
+        expected_total = max(fallback_total or 0, guild.member_count or 0)
+        has_full_member_cache = bool(members) and (expected_total == 0 or len(members) >= expected_total)
+
+        if has_full_member_cache:
             all_members = len(members)
             bots = sum(1 for member in members if member.bot)
             human_members = all_members - bots
-            online_members = sum(
-                1 for member in members if not member.bot and getattr(member, "status", discord.Status.offline) != discord.Status.offline
-            )
+            if self.intents.presences:
+                online_members = sum(
+                    1 for member in members if not member.bot and getattr(member, "status", discord.Status.offline) != discord.Status.offline
+                )
+            else:
+                online_members = fallback_online or 0
         else:
-            all_members = fallback_total or 0
+            all_members = expected_total
             bots = 0
             human_members = max(0, all_members - bots)
             online_members = fallback_online or 0
