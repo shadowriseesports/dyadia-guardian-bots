@@ -4,7 +4,7 @@ Clean Python Discord bot for moderation, verification, modmail, staff applicatio
 
 ## Kept Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel`, `qotd`, `autoreact ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel` (with `post` and `disable`), `qotd`, `autoreact ...`, `nolink ...`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Persistent HOK Dyadia verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users

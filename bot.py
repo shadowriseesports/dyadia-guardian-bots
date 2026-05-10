@@ -458,6 +458,27 @@ class StaffApplicationView(discord.ui.View):
         )
 
 
+class DisabledStaffApplicationView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Community Moderator",
+                style=discord.ButtonStyle.success,
+                custom_id="staff_application:community",
+                disabled=True,
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Support Moderator",
+                style=discord.ButtonStyle.primary,
+                custom_id="staff_application:support",
+                disabled=True,
+            )
+        )
+
+
 class StaffApplicationContinueView(discord.ui.View):
     def __init__(self, user_id: int, next_page: int) -> None:
         super().__init__(timeout=900)
@@ -904,7 +925,8 @@ class DyadiaGuardianBot(commands.Bot):
             embed.add_field(
                 name="Staff Application",
                 value=(
-                    "`/staffapplypanel` post the staff application button panel\n"
+                    "`/staffapplypanel post` post the staff application button panel\n"
+                    "`/staffapplypanel disable` disable the active staff application panel in a channel\n"
                     "Members can press the role button to start the 2-page application form"
                 ),
                 inline=False,
@@ -1039,13 +1061,28 @@ class DyadiaGuardianBot(commands.Bot):
         async def modlogs(interaction: discord.Interaction, user: discord.User) -> None:
             await self.handle_modlogs(interaction, user)
 
-        @tree.command(name="staffapplypanel", description="Post the staff application form panel")
+        staffapplypanel = app_commands.Group(
+            name="staffapplypanel",
+            description="Manage the staff application panel",
+        )
+
+        @staffapplypanel.command(name="post", description="Post the staff application button panel")
         @app_commands.describe(channel="Channel where the staff application panel should be posted")
-        async def staffapplypanel(
+        async def staffapplypanel_post(
             interaction: discord.Interaction,
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_staff_apply_panel(interaction, channel)
+
+        @staffapplypanel.command(name="disable", description="Disable the staff application panel in a channel")
+        @app_commands.describe(channel="Channel containing the staff application panel")
+        async def staffapplypanel_disable(
+            interaction: discord.Interaction,
+            channel: Optional[discord.TextChannel] = None,
+        ) -> None:
+            await self.handle_staff_apply_panel_disable(interaction, channel)
+
+        tree.add_command(staffapplypanel)
 
         @tree.command(name="verificationpanel", description="Post the HOK Dyadia verification panel")
         @app_commands.describe(channel="Channel where the verification panel should be posted")
@@ -4224,6 +4261,71 @@ class DyadiaGuardianBot(commands.Bot):
         await target_channel.send(embed=self.create_staff_application_panel_embed(), view=self.staff_application_view)
         await interaction.response.send_message(
             f"Staff application panel posted in {target_channel.mention}.",
+            ephemeral=True,
+        )
+
+    async def find_staff_application_panel_message(self, channel: discord.TextChannel) -> Optional[discord.Message]:
+        async for message in channel.history(limit=200):
+            if not message.embeds:
+                continue
+            embed = message.embeds[0]
+            if embed.title != "Honor of Kings | Northeast India":
+                continue
+            if not message.components:
+                continue
+
+            custom_ids = [
+                child.custom_id
+                for row in message.components
+                for child in getattr(row, "children", [])
+                if hasattr(child, "custom_id") and child.custom_id is not None
+            ]
+            if "staff_application:community" in custom_ids and "staff_application:support" in custom_ids:
+                return message
+        return None
+
+    async def handle_staff_apply_panel_disable(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel],
+    ) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel
+        if target_channel is None:
+            if isinstance(interaction.channel, discord.TextChannel):
+                target_channel = interaction.channel
+            else:
+                await interaction.response.send_message("Please choose a text channel containing the application panel.", ephemeral=True)
+                return
+
+        panel_message = await self.find_staff_application_panel_message(target_channel)
+        if panel_message is None:
+            await interaction.response.send_message(
+                "I could not find the active staff application panel message in that channel.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await panel_message.edit(view=DisabledStaffApplicationView())
+        except discord.HTTPException:
+            LOGGER.exception(
+                "Failed to disable staff application panel in channel %s",
+                target_channel.id,
+            )
+            await interaction.response.send_message(
+                "I could not disable the panel right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Staff application panel disabled in {target_channel.mention}.",
             ephemeral=True,
         )
 

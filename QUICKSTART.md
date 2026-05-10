@@ -116,7 +116,14 @@ You should see logs confirming:
 2. Use `/verificationpanel` to post the HOK Dyadia verification panel
 3. Click the `HOK Dyadia Verification` button with a test member
 4. Confirm the member receives the verified role
-5. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
+7. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
+
+## 11. Test staff applications
+
+1. Use `/staffapplypanel post` to post the staff application button panel
+2. Choose either Community Moderator or Support Moderator
+3. Complete the 2-page application form
+4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
 ## 11. Railway note
 
