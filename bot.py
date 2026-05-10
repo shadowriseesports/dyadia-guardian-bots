@@ -264,6 +264,21 @@ def slugify_text(value: str) -> str:
     return collapsed.lower()
 
 
+def format_channel_name(value: str, *, uppercase: bool = False) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    cleaned = re.sub(r"[^\w\s-]", "", normalized, flags=re.UNICODE)
+    collapsed = re.sub(r"[-\s]+", "-", cleaned).strip("-")
+    if uppercase:
+        return collapsed.upper()
+    return collapsed.lower()
+
+
+def format_stats_display_name(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    cleaned = re.sub(r"[^\w\s:&-]", "", normalized, flags=re.UNICODE)
+    return cleaned.upper()[:100]
+
+
 def normalize_optional_text(value: str) -> Optional[str]:
     cleaned = value.strip()
     return cleaned or None
@@ -1749,11 +1764,13 @@ class DyadiaGuardianBot(commands.Bot):
                 "Invalid SERVER_STATS_CHANNEL_FORMAT %r; falling back to members-{total}",
                 self.settings.server_stats_channel_format,
             )
-            raw_name = f"members-{total_members if total_members is not None else 'unknown'}"
-        slug = slugify_text(raw_name)
-        if not slug:
-            slug = "members"
-        return slug[:100]
+            raw_name = f"MEMBERS: {total_members if total_members is not None else 'UNKNOWN'}"
+        return raw_name.strip()[:100] or "MEMBERS"
+
+    def render_stats_channel_name(self, channel: discord.abc.GuildChannel, raw_name: str) -> str:
+        if isinstance(channel, discord.TextChannel):
+            return format_channel_name(raw_name, uppercase=True)[:100] or "STATS"
+        return format_stats_display_name(raw_name) or "STATS"
 
     async def update_server_stats_channel_name(
         self,
@@ -1775,12 +1792,13 @@ class DyadiaGuardianBot(commands.Bot):
             )
             return
 
-        new_name = self.format_server_stats_channel_name(
+        raw_name = self.format_server_stats_channel_name(
             guild=guild,
             online_members=online_members,
             total_members=total_members,
             boosters=boosters,
         )
+        new_name = self.render_stats_channel_name(channel, raw_name)
         if channel.name == new_name:
             return
 
@@ -1811,7 +1829,7 @@ class DyadiaGuardianBot(commands.Bot):
             )
             return
 
-        new_name = slugify_text(f"{label}: {value}")[:100] or "stats"
+        new_name = self.render_stats_channel_name(channel, f"{label}: {value}")
         if channel.name == new_name:
             return
 
