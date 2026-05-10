@@ -13,6 +13,9 @@ Fill these values:
 - `DISCORD_TOKEN`
 - `MODMAIL_FORUM_ID`
 - `MOD_LOG_CHANNEL_ID`
+- `SERVER_STATS_CHANNEL_ID` if you want the bot to rename a dedicated stats channel
+- `SERVER_STATS_CHANNEL_FORMAT` if you want a custom stats channel name like `members-{total}` or `online-{online}`
+- `ALL_MEMBERS_STATS_CHANNEL_ID`, `MEMBERS_STATS_CHANNEL_ID`, `BOTS_STATS_CHANNEL_ID`, `BOOSTS_STATS_CHANNEL_ID`, and `ONLINE_MEMBERS_STATS_CHANNEL_ID` if you want five separate auto-updating stat channels
 - `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a separate text channel
 - `INVITE_LOG_CHANNEL_ID` if you want invite logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel

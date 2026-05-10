@@ -16,6 +16,12 @@ class Settings:
     staff_application_channel_id: int
     moderator_role_id: int
     admin_role_id: int
+    server_stats_channel_id: int = 0
+    all_members_stats_channel_id: int = 0
+    members_stats_channel_id: int = 0
+    bots_stats_channel_id: int = 0
+    boosts_stats_channel_id: int = 0
+    online_members_stats_channel_id: int = 0
     server_log_channel_id: int = 0
     invite_log_channel_id: int = 0
     level_up_channel_id: int = 0
@@ -37,6 +43,7 @@ class Settings:
     anti_raid_timeout_minutes: int = 30
     server_name: str = "Honor Of Kings | Northeast India"
     bot_status_text: str = "Guardian of Honor of Kings | Northeast india"
+    server_stats_channel_format: str = "members-{total}"
 
 
 def _require_int(name: str) -> int:
@@ -98,6 +105,12 @@ def load_settings() -> Settings:
         discord_token=token,
         modmail_forum_id=_require_int("MODMAIL_FORUM_ID"),
         mod_log_channel_id=_require_int("MOD_LOG_CHANNEL_ID"),
+        server_stats_channel_id=_get_optional_int("SERVER_STATS_CHANNEL_ID"),
+        all_members_stats_channel_id=_get_optional_int("ALL_MEMBERS_STATS_CHANNEL_ID"),
+        members_stats_channel_id=_get_optional_int("MEMBERS_STATS_CHANNEL_ID"),
+        bots_stats_channel_id=_get_optional_int("BOTS_STATS_CHANNEL_ID"),
+        boosts_stats_channel_id=_get_optional_int("BOOSTS_STATS_CHANNEL_ID"),
+        online_members_stats_channel_id=_get_optional_int("ONLINE_MEMBERS_STATS_CHANNEL_ID"),
         server_log_channel_id=_get_optional_int("SERVER_LOG_CHANNEL_ID"),
         invite_log_channel_id=_get_optional_int("INVITE_LOG_CHANNEL_ID"),
         verification_log_channel_id=_get_optional_int("VERIFICATION_LOG_CHANNEL_ID"),
@@ -122,4 +135,5 @@ def load_settings() -> Settings:
         anti_raid_timeout_minutes=_get_int("ANTI_RAID_TIMEOUT_MINUTES", 30, minimum=1),
         bot_status_text=os.getenv("BOT_STATUS_TEXT", "Guardian of Honor of Kings | Northeast india").strip()
         or "Guardian of Honor of Kings | Northeast india",
+        server_stats_channel_format=os.getenv("SERVER_STATS_CHANNEL_FORMAT", "members-{total}").strip() or "members-{total}",
     )

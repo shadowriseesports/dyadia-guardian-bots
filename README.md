@@ -61,6 +61,8 @@ Enable these intents for the bot:
 - Anti-raid settings can be adjusted through `.env` without editing code.
 - Use `/antiraid status` to check whether raid mode is active.
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
+- Set `SERVER_STATS_CHANNEL_ID` if you want the bot to rename a dedicated channel with live stats. Use `SERVER_STATS_CHANNEL_FORMAT` to control the name template, with placeholders `{guild}`, `{online}`, `{total}`, and `{boosters}`.
+- Set `ALL_MEMBERS_STATS_CHANNEL_ID`, `MEMBERS_STATS_CHANNEL_ID`, `BOTS_STATS_CHANNEL_ID`, `BOOSTS_STATS_CHANNEL_ID`, and `ONLINE_MEMBERS_STATS_CHANNEL_ID` if you want the bot to rename separate stat channels like `all-members-823`, `members-800`, `bots-23`, `boosts-4`, and `online-members-107`.
 - Set `INVITE_LOG_CHANNEL_ID` if you want invite create/delete and invite-used join logs in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.

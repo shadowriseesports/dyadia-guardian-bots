@@ -1543,6 +1543,43 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.warning("Configured server log channel is not a text channel: %s", channel_id)
         return None
 
+    async def get_server_stats_channel(self) -> Optional[discord.abc.GuildChannel]:
+        channel_id = self.settings.server_stats_channel_id
+        if channel_id <= 0:
+            return None
+
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch server stats channel %s", channel_id)
+                return None
+
+        if isinstance(channel, discord.abc.GuildChannel):
+            return channel
+
+        LOGGER.warning("Configured server stats channel is not a guild channel: %s", channel_id)
+        return None
+
+    async def get_configured_guild_channel(self, channel_id: int, label: str) -> Optional[discord.abc.GuildChannel]:
+        if channel_id <= 0:
+            return None
+
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch %s channel %s", label, channel_id)
+                return None
+
+        if isinstance(channel, discord.abc.GuildChannel):
+            return channel
+
+        LOGGER.warning("Configured %s channel is not a guild channel: %s", label, channel_id)
+        return None
+
     async def get_invite_log_channel(self) -> Optional[discord.TextChannel]:
         channel_id = self.settings.invite_log_channel_id or self.settings.server_log_channel_id or self.settings.mod_log_channel_id
         channel = self.get_channel(channel_id)
@@ -1607,6 +1644,35 @@ class DyadiaGuardianBot(commands.Bot):
             approximate_total = fetched_guild.approximate_member_count
         return approximate_online, approximate_total
 
+    def get_precise_guild_stats(
+        self,
+        guild: discord.Guild,
+        *,
+        fallback_online: Optional[int],
+        fallback_total: Optional[int],
+    ) -> dict[str, int]:
+        members = list(guild.members)
+        if members:
+            all_members = len(members)
+            bots = sum(1 for member in members if member.bot)
+            human_members = all_members - bots
+            online_members = sum(
+                1 for member in members if not member.bot and getattr(member, "status", discord.Status.offline) != discord.Status.offline
+            )
+        else:
+            all_members = fallback_total or 0
+            bots = 0
+            human_members = max(0, all_members - bots)
+            online_members = fallback_online or 0
+
+        return {
+            "all_members": all_members,
+            "members": human_members,
+            "bots": bots,
+            "boosts": guild.premium_subscription_count or 0,
+            "online_members": online_members,
+        }
+
     def create_server_stats_embed(
         self,
         guild: discord.Guild,
@@ -1635,39 +1701,175 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="After Boosters", value=str(boosters), inline=True)
         return embed
 
-    async def log_guild_server_stats(self, guild: discord.Guild) -> None:
-        channel = await self.get_server_log_channel()
+    def format_server_stats_channel_name(
+        self,
+        *,
+        guild: discord.Guild,
+        online_members: Optional[int],
+        total_members: Optional[int],
+        boosters: int,
+    ) -> str:
+        try:
+            raw_name = self.settings.server_stats_channel_format.format(
+                guild=guild.name,
+                online=online_members if online_members is not None else "unknown",
+                total=total_members if total_members is not None else "unknown",
+                boosters=boosters,
+            )
+        except (IndexError, KeyError, ValueError):
+            LOGGER.exception(
+                "Invalid SERVER_STATS_CHANNEL_FORMAT %r; falling back to members-{total}",
+                self.settings.server_stats_channel_format,
+            )
+            raw_name = f"members-{total_members if total_members is not None else 'unknown'}"
+        slug = slugify_text(raw_name)
+        if not slug:
+            slug = "members"
+        return slug[:100]
+
+    async def update_server_stats_channel_name(
+        self,
+        guild: discord.Guild,
+        *,
+        online_members: Optional[int],
+        total_members: Optional[int],
+        boosters: int,
+    ) -> None:
+        channel = await self.get_server_stats_channel()
         if channel is None:
-            LOGGER.warning("Skipping server stats for guild %s because no server log channel is available.", guild.id)
+            return
+        if channel.guild.id != guild.id:
+            LOGGER.warning(
+                "Skipping server stats channel rename for guild %s because configured channel %s belongs to guild %s",
+                guild.id,
+                channel.id,
+                channel.guild.id,
+            )
             return
 
-        LOGGER.info("Sending server stats for guild %s to channel %s", guild.id, channel.id)
+        new_name = self.format_server_stats_channel_name(
+            guild=guild,
+            online_members=online_members,
+            total_members=total_members,
+            boosters=boosters,
+        )
+        if channel.name == new_name:
+            return
+
+        try:
+            await channel.edit(name=new_name, reason="Updating server stats channel name")
+            LOGGER.info("Updated server stats channel %s name to %s for guild %s", channel.id, new_name, guild.id)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to update server stats channel %s for guild %s", channel.id, guild.id)
+
+    async def update_named_stats_channel(
+        self,
+        *,
+        guild: discord.Guild,
+        channel_id: int,
+        label: str,
+        value: int,
+    ) -> None:
+        channel = await self.get_configured_guild_channel(channel_id, label)
+        if channel is None:
+            return
+        if channel.guild.id != guild.id:
+            LOGGER.warning(
+                "Skipping %s channel rename for guild %s because configured channel %s belongs to guild %s",
+                label,
+                guild.id,
+                channel.id,
+                channel.guild.id,
+            )
+            return
+
+        new_name = slugify_text(f"{label}: {value}")[:100] or "stats"
+        if channel.name == new_name:
+            return
+
+        try:
+            await channel.edit(name=new_name, reason="Updating server stats channel name")
+            LOGGER.info("Updated %s channel %s name to %s for guild %s", label, channel.id, new_name, guild.id)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to update %s channel %s for guild %s", label, channel.id, guild.id)
+
+    async def update_detailed_server_stats_channels(self, guild: discord.Guild, stats: dict[str, int]) -> None:
+        await self.update_named_stats_channel(
+            guild=guild,
+            channel_id=self.settings.all_members_stats_channel_id,
+            label="All Members",
+            value=stats["all_members"],
+        )
+        await self.update_named_stats_channel(
+            guild=guild,
+            channel_id=self.settings.members_stats_channel_id,
+            label="Members",
+            value=stats["members"],
+        )
+        await self.update_named_stats_channel(
+            guild=guild,
+            channel_id=self.settings.bots_stats_channel_id,
+            label="Bots",
+            value=stats["bots"],
+        )
+        await self.update_named_stats_channel(
+            guild=guild,
+            channel_id=self.settings.boosts_stats_channel_id,
+            label="Boosts",
+            value=stats["boosts"],
+        )
+        await self.update_named_stats_channel(
+            guild=guild,
+            channel_id=self.settings.online_members_stats_channel_id,
+            label="Online Members",
+            value=stats["online_members"],
+        )
+
+    async def log_guild_server_stats(self, guild: discord.Guild) -> None:
         try:
             online_members, total_members = await self.fetch_guild_counts(guild)
-            boosters = guild.premium_subscription_count or 0
+            stats = self.get_precise_guild_stats(
+                guild,
+                fallback_online=online_members,
+                fallback_total=total_members,
+            )
+            boosters = stats["boosts"]
             previous_online_members, previous_total_members, previous_boosters = self.previous_server_stats.get(
                 guild.id,
                 (None, None, 0),
             )
-            embed = self.create_server_stats_embed(
+            channel = await self.get_server_log_channel()
+            if channel is not None:
+                LOGGER.info("Sending server stats for guild %s to channel %s", guild.id, channel.id)
+                embed = self.create_server_stats_embed(
+                    guild,
+                    previous_online_members,
+                    previous_total_members,
+                    previous_boosters,
+                    online_members,
+                    total_members,
+                    boosters,
+                )
+                await channel.send(embed=embed)
+            else:
+                LOGGER.warning("No server log channel available for guild %s; skipping stats embed.", guild.id)
+
+            await self.update_server_stats_channel_name(
                 guild,
-                previous_online_members,
-                previous_total_members,
-                previous_boosters,
-                online_members,
-                total_members,
-                boosters,
+                online_members=online_members,
+                total_members=total_members,
+                boosters=boosters,
             )
-            await channel.send(embed=embed)
-            self.previous_server_stats[guild.id] = (online_members, total_members, boosters)
+            await self.update_detailed_server_stats_channels(guild, stats)
+            self.previous_server_stats[guild.id] = (stats["online_members"], stats["all_members"], boosters)
             LOGGER.info(
                 "Sent server stats for guild %s | before=(online=%s total=%s boosters=%s) after=(online=%s total=%s boosters=%s)",
                 guild.id,
                 previous_online_members,
                 previous_total_members,
                 previous_boosters,
-                online_members,
-                total_members,
+                stats["online_members"],
+                stats["all_members"],
                 boosters,
             )
         except discord.HTTPException:
