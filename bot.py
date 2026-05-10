@@ -327,35 +327,41 @@ class VerificationView(discord.ui.View):
         )
 
 
-class StaffApplicationPageOneModal(discord.ui.Modal, title="Staff Application 1/2"):
-    motivation = discord.ui.TextInput(
-        label="1. Motivation",
-        style=discord.TextStyle.paragraph,
-        placeholder="Briefly explain why you are applying for this role.",
-        max_length=1000,
+class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 1/2"):
+    discord_username = discord.ui.TextInput(
+        label="1. Discord Username",
+        style=discord.TextStyle.short,
+        placeholder="Enter your Discord username.",
+        max_length=100,
+    )
+    ign = discord.ui.TextInput(
+        label="2. IGN",
+        style=discord.TextStyle.short,
+        placeholder="Enter your in-game name.",
+        max_length=100,
+    )
+    hok_uid = discord.ui.TextInput(
+        label="3. HOK UID",
+        style=discord.TextStyle.short,
+        placeholder="Enter your Honor of Kings UID.",
+        max_length=100,
     )
     relevant_experience = discord.ui.TextInput(
-        label="2. Relevant Experience",
+        label="4. Tournament / Referee Experience",
         style=discord.TextStyle.paragraph,
-        placeholder="Share your moderation or support experience, platforms, and responsibilities.",
+        placeholder="Share any tournament or referee experience you have.",
         max_length=1000,
     )
     core_competencies = discord.ui.TextInput(
-        label="3. Core Competencies",
+        label="5. Rules Knowledge",
         style=discord.TextStyle.paragraph,
-        placeholder="Share communication, conflict resolution, rule enforcement, and problem-solving skills.",
+        placeholder="Do you know HOK competitive rules? Answer Yes/No and add any context if needed.",
         max_length=1000,
     )
-    situational_assessment = discord.ui.TextInput(
-        label="4. Situational Assessment",
+    skill_summary = discord.ui.TextInput(
+        label="6. Skills",
         style=discord.TextStyle.paragraph,
-        placeholder="How would you handle violations, arguments, and unfair-treatment complaints?",
-        max_length=1000,
-    )
-    role_specific_responsibilities = discord.ui.TextInput(
-        label="5. Role Responsibilities",
-        style=discord.TextStyle.paragraph,
-        placeholder="Explain how you would handle the duties of the role you selected.",
+        placeholder="Cover Draft & Ban, Lobby Management, Match Reporting, and Conflict Handling.",
         max_length=1000,
     )
 
@@ -373,13 +379,14 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Staff Application 1/
             )
             return
 
-        draft.motivation = self.motivation.value
+        draft.motivation = self.discord_username.value
+        draft.role_specific_responsibilities = self.ign.value
+        draft.situational_assessment = self.hok_uid.value
         draft.relevant_experience = self.relevant_experience.value
         draft.core_competencies = self.core_competencies.value
-        draft.situational_assessment = self.situational_assessment.value
-        draft.role_specific_responsibilities = self.role_specific_responsibilities.value
+        draft.decision_making_and_judgment = self.skill_summary.value
         await interaction.response.send_message(
-            "Page 1 saved. Press `Open Final Page` to finish your application.",
+            "Page 1 saved. Press `Open Final Page` to finish your referee application.",
             view=StaffApplicationContinueView(interaction.user.id, 2),
             ephemeral=True,
         )
@@ -392,23 +399,23 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Staff Application 1/
             await interaction.response.send_message("The application form failed. Please try again.", ephemeral=True)
 
 
-class StaffApplicationPageTwoModal(discord.ui.Modal, title="Staff Application 2/2"):
+class StaffApplicationPageTwoModal(discord.ui.Modal, title="Referee Application 2/2"):
     activity_and_availability = discord.ui.TextInput(
-        label="6. Availability",
+        label="7. Available Days & Time",
         style=discord.TextStyle.paragraph,
-        placeholder="Share daily hours, peak times, and how quickly you can respond to urgent issues.",
+        placeholder="List the days and times you are available to referee matches.",
         max_length=1000,
     )
-    decision_making_and_judgment = discord.ui.TextInput(
-        label="7. Judgment",
+    setup_details = discord.ui.TextInput(
+        label="8. Setup",
         style=discord.TextStyle.paragraph,
-        placeholder="Give an example of a quick decision in a difficult situation and its outcome.",
+        placeholder="Share your device, Discord VC readiness (Yes/No), and internet stability (Yes/No).",
         max_length=1000,
     )
     commitment_and_declaration = discord.ui.TextInput(
-        label="8. Commitment",
+        label="9. Agreement",
         style=discord.TextStyle.paragraph,
-        placeholder="Confirm professionalism, 3-month commitment, and that your application is accurate.",
+        placeholder="Confirm that you agree to follow all Crimson Cup rules and maintain fair play.",
         max_length=1000,
     )
 
@@ -427,7 +434,7 @@ class StaffApplicationPageTwoModal(discord.ui.Modal, title="Staff Application 2/
             return
 
         draft.activity_and_availability = self.activity_and_availability.value
-        draft.decision_making_and_judgment = self.decision_making_and_judgment.value
+        draft.selected_role = self.setup_details.value
         draft.commitment_and_declaration = self.commitment_and_declaration.value
         await self.bot.submit_staff_application(interaction, draft)
 
@@ -444,16 +451,9 @@ class StaffApplicationView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Button(
-                label="Community Moderator",
+                label="Tournament Referee",
                 style=discord.ButtonStyle.success,
-                custom_id="staff_application:community",
-            )
-        )
-        self.add_item(
-            discord.ui.Button(
-                label="Support Moderator",
-                style=discord.ButtonStyle.primary,
-                custom_id="staff_application:support",
+                custom_id="staff_application:referee",
             )
         )
 
@@ -463,17 +463,9 @@ class DisabledStaffApplicationView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Button(
-                label="Community Moderator",
+                label="Tournament Referee",
                 style=discord.ButtonStyle.success,
-                custom_id="staff_application:community",
-                disabled=True,
-            )
-        )
-        self.add_item(
-            discord.ui.Button(
-                label="Support Moderator",
-                style=discord.ButtonStyle.primary,
-                custom_id="staff_application:support",
+                custom_id="staff_application:referee",
                 disabled=True,
             )
         )
@@ -867,14 +859,9 @@ class DyadiaGuardianBot(commands.Bot):
                 )
                 await self.close_modmail_from_button(interaction)
                 return
-            if custom_id == "staff_application:community":
-                LOGGER.info("Community moderator application opened by %s (%s)", interaction.user, interaction.user.id)
-                self.staff_application_drafts[interaction.user.id] = StaffApplicationDraft(selected_role="Community Moderator")
-                await interaction.response.send_modal(StaffApplicationPageOneModal(self, interaction.user.id))
-                return
-            if custom_id == "staff_application:support":
-                LOGGER.info("Support moderator application opened by %s (%s)", interaction.user, interaction.user.id)
-                self.staff_application_drafts[interaction.user.id] = StaffApplicationDraft(selected_role="Support Moderator")
+            if custom_id == "staff_application:referee":
+                LOGGER.info("Tournament referee application opened by %s (%s)", interaction.user, interaction.user.id)
+                self.staff_application_drafts[interaction.user.id] = StaffApplicationDraft(selected_role="Tournament Referee")
                 await interaction.response.send_modal(StaffApplicationPageOneModal(self, interaction.user.id))
                 return
             if custom_id and custom_id.startswith("staff_application:continue:"):
@@ -882,7 +869,7 @@ class DyadiaGuardianBot(commands.Bot):
                 return
             if custom_id == "staff_application:open":
                 await interaction.response.send_message(
-                    "This staff application panel is outdated. Please use a newly posted panel.",
+                    "This referee application panel is outdated. Please use a newly posted panel.",
                     ephemeral=True,
                 )
                 return
@@ -923,11 +910,11 @@ class DyadiaGuardianBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
-                name="Staff Application",
+                name="Referee Application",
                 value=(
-                    "`/staffapplypanel post` post the staff application button panel\n"
-                    "`/staffapplypanel disable` disable the active staff application panel in a channel\n"
-                    "Members can press the role button to start the 2-page application form"
+                    "`/staffapplypanel post` post the referee application panel\n"
+                    "`/staffapplypanel disable` disable the active referee application panel in a channel\n"
+                    "Members can press the button to start the 2-page referee application form"
                 ),
                 inline=False,
             )
@@ -1063,19 +1050,19 @@ class DyadiaGuardianBot(commands.Bot):
 
         staffapplypanel = app_commands.Group(
             name="staffapplypanel",
-            description="Manage the staff application panel",
+            description="Manage the referee application panel",
         )
 
-        @staffapplypanel.command(name="post", description="Post the staff application button panel")
-        @app_commands.describe(channel="Channel where the staff application panel should be posted")
+        @staffapplypanel.command(name="post", description="Post the referee application panel")
+        @app_commands.describe(channel="Channel where the referee application panel should be posted")
         async def staffapplypanel_post(
             interaction: discord.Interaction,
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_staff_apply_panel(interaction, channel)
 
-        @staffapplypanel.command(name="disable", description="Disable the staff application panel in a channel")
-        @app_commands.describe(channel="Channel containing the staff application panel")
+        @staffapplypanel.command(name="disable", description="Disable the referee application panel in a channel")
+        @app_commands.describe(channel="Channel containing the referee application panel")
         async def staffapplypanel_disable(
             interaction: discord.Interaction,
             channel: Optional[discord.TextChannel] = None,
@@ -1282,10 +1269,9 @@ class DyadiaGuardianBot(commands.Bot):
         embed = make_embed(
             "Honor of Kings | Northeast India",
             (
-                "**Staff Application Form**\n"
-                "(Community Moderator & Support Moderator)\n\n"
-                "Want to join the staff team?\n\n"
-                "Press the role you want below and fill out the form in 2 pages. "
+                "**Crimson Cup - Referee Application**\n\n"
+                "Apply to become a tournament referee for Crimson Cup.\n\n"
+                "Press the button below and fill out the form in 2 pages. "
                 "Your application will be sent privately to the review team."
             ),
             discord.Color.gold(),
@@ -1293,21 +1279,21 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(
             name="Application Sections",
             value=(
-                "1. Position Applied For\n"
-                "2. Relevant Experience\n"
-                "3. Core Competencies\n"
-                "4. Situational Assessment\n"
-                "5. Role-Specific Responsibilities\n"
-                "6. Activity & Availability\n"
-                "7. Decision-Making & Judgment\n"
-                "8. Commitment\n"
-                "9. Declaration"
+                "1. Discord Username\n"
+                "2. IGN\n"
+                "3. HOK UID\n"
+                "4. Tournament / Referee Experience\n"
+                "5. Knowledge of HOK Competitive Rules\n"
+                "6. Skills\n"
+                "7. Available Days & Time\n"
+                "8. Setup\n"
+                "9. Agreement"
             ),
             inline=False,
         )
         embed.add_field(
             name="Before You Apply",
-            value="Be honest, give complete answers, and keep your DMs open in case staff contact you.",
+            value="Be honest, give complete answers, and keep your DMs open in case tournament staff contact you.",
             inline=False,
         )
         return embed
@@ -1452,22 +1438,18 @@ class DyadiaGuardianBot(commands.Bot):
         draft: StaffApplicationDraft,
         guild: Optional[discord.Guild],
     ) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"Staff Application - {draft.selected_role}",
-            color=discord.Color.gold(),
-            timestamp=utc_now(),
-        )
+        embed = discord.Embed(title="Crimson Cup - Referee Application", color=discord.Color.gold(), timestamp=utc_now())
         embed.add_field(name="Applicant", value=f"{user} ({user.id})", inline=False)
         embed.add_field(name="Server", value=guild.name if guild else "Direct Message", inline=False)
-        embed.add_field(name="1. Position Applied For", value=draft.selected_role, inline=False)
-        embed.add_field(name="Motivation", value=draft.motivation, inline=False)
-        embed.add_field(name="2. Relevant Experience", value=draft.relevant_experience, inline=False)
-        embed.add_field(name="3. Core Competencies", value=draft.core_competencies, inline=False)
-        embed.add_field(name="4. Situational Assessment", value=draft.situational_assessment, inline=False)
-        embed.add_field(name="5. Role Responsibilities", value=draft.role_specific_responsibilities, inline=False)
-        embed.add_field(name="6. Availability", value=draft.activity_and_availability, inline=False)
-        embed.add_field(name="7. Decision-Making & Judgment", value=draft.decision_making_and_judgment, inline=False)
-        embed.add_field(name="8. Commitment & Declaration", value=draft.commitment_and_declaration, inline=False)
+        embed.add_field(name="Discord Username", value=draft.motivation, inline=False)
+        embed.add_field(name="IGN", value=draft.role_specific_responsibilities, inline=False)
+        embed.add_field(name="HOK UID", value=draft.situational_assessment, inline=False)
+        embed.add_field(name="Tournament / Referee Experience", value=draft.relevant_experience, inline=False)
+        embed.add_field(name="Knowledge of HOK Competitive Rules", value=draft.core_competencies, inline=False)
+        embed.add_field(name="Skills", value=draft.decision_making_and_judgment, inline=False)
+        embed.add_field(name="Available Days & Time", value=draft.activity_and_availability, inline=False)
+        embed.add_field(name="Setup", value=draft.selected_role, inline=False)
+        embed.add_field(name="Agreement", value=draft.commitment_and_declaration, inline=False)
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text=BRAND_FOOTER)
         return embed
@@ -4260,7 +4242,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         await target_channel.send(embed=self.create_staff_application_panel_embed(), view=self.staff_application_view)
         await interaction.response.send_message(
-            f"Staff application panel posted in {target_channel.mention}.",
+            f"Referee application panel posted in {target_channel.mention}.",
             ephemeral=True,
         )
 
@@ -4280,7 +4262,7 @@ class DyadiaGuardianBot(commands.Bot):
                 for child in getattr(row, "children", [])
                 if hasattr(child, "custom_id") and child.custom_id is not None
             ]
-            if "staff_application:community" in custom_ids and "staff_application:support" in custom_ids:
+            if "staff_application:referee" in custom_ids:
                 return message
         return None
 
@@ -4306,7 +4288,7 @@ class DyadiaGuardianBot(commands.Bot):
         panel_message = await self.find_staff_application_panel_message(target_channel)
         if panel_message is None:
             await interaction.response.send_message(
-                "I could not find the active staff application panel message in that channel.",
+                "I could not find the active referee application panel message in that channel.",
                 ephemeral=True,
             )
             return
@@ -4315,7 +4297,7 @@ class DyadiaGuardianBot(commands.Bot):
             await panel_message.edit(view=DisabledStaffApplicationView())
         except discord.HTTPException:
             LOGGER.exception(
-                "Failed to disable staff application panel in channel %s",
+                "Failed to disable referee application panel in channel %s",
                 target_channel.id,
             )
             await interaction.response.send_message(
@@ -4325,7 +4307,7 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         await interaction.response.send_message(
-            f"Staff application panel disabled in {target_channel.mention}.",
+            f"Referee application panel disabled in {target_channel.mention}.",
             ephemeral=True,
         )
 
@@ -4452,7 +4434,7 @@ class DyadiaGuardianBot(commands.Bot):
         embed = self.create_staff_application_embed(interaction.user, draft, interaction.guild)
         try:
             await channel.send(
-                content=f"<@&{self.settings.admin_role_id}> New staff application received.",
+                content=f"<@&{self.settings.admin_role_id}> New referee application received.",
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
@@ -4466,7 +4448,7 @@ class DyadiaGuardianBot(commands.Bot):
 
         self.staff_application_drafts.pop(interaction.user.id, None)
         await interaction.response.send_message(
-            "Your staff application has been submitted successfully.",
+            "Your referee application has been submitted successfully.",
             ephemeral=True,
         )
 
