@@ -358,13 +358,6 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 
         placeholder="Do you know HOK competitive rules? Answer Yes/No and add any context if needed.",
         max_length=1000,
     )
-    skill_summary = discord.ui.TextInput(
-        label="6. Skills",
-        style=discord.TextStyle.paragraph,
-        placeholder="Cover Draft & Ban, Lobby Management, Match Reporting, and Conflict Handling.",
-        max_length=1000,
-    )
-
     def __init__(self, bot: "DyadiaGuardianBot", user_id: int) -> None:
         super().__init__()
         self.bot = bot
@@ -384,7 +377,6 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 
         draft.situational_assessment = self.hok_uid.value
         draft.relevant_experience = self.relevant_experience.value
         draft.core_competencies = self.core_competencies.value
-        draft.decision_making_and_judgment = self.skill_summary.value
         await interaction.response.send_message(
             "Page 1 saved. Press `Open Final Page` to finish your referee application.",
             view=StaffApplicationContinueView(interaction.user.id, 2),
@@ -400,6 +392,12 @@ class StaffApplicationPageOneModal(discord.ui.Modal, title="Referee Application 
 
 
 class StaffApplicationPageTwoModal(discord.ui.Modal, title="Referee Application 2/2"):
+    skill_summary = discord.ui.TextInput(
+        label="6. Skills",
+        style=discord.TextStyle.paragraph,
+        placeholder="Cover Draft & Ban, Lobby Management, Match Reporting, and Conflict Handling.",
+        max_length=1000,
+    )
     activity_and_availability = discord.ui.TextInput(
         label="7. Available Days & Time",
         style=discord.TextStyle.paragraph,
@@ -433,6 +431,7 @@ class StaffApplicationPageTwoModal(discord.ui.Modal, title="Referee Application 
             )
             return
 
+        draft.decision_making_and_judgment = self.skill_summary.value
         draft.activity_and_availability = self.activity_and_availability.value
         draft.selected_role = self.setup_details.value
         draft.commitment_and_declaration = self.commitment_and_declaration.value
