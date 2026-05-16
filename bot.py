@@ -4,7 +4,6 @@ import asyncio
 import html
 import json
 import logging
-import random
 import re
 from collections import deque
 from dataclasses import dataclass, field
@@ -46,14 +45,9 @@ DEFAULT_WELCOME_BANNER_URL = (
 )
 BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 QOTD_ROLE_NAME = "❓QOTD"
-LEVEL_DATA_PATH = Path("level_data.json")
-INVITE_DATA_PATH = Path("invite_data.json")
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
 INSTAGRAM_STATE_PATH = Path("instagram_state.json")
-LEVEL_XP_GAIN_MIN = 15
-LEVEL_XP_GAIN_MAX = 25
-LEADERBOARD_LIMIT = 10
 INSTAGRAM_STATE_LIMIT = 200
 INSTAGRAM_REQUEST_TIMEOUT_SECONDS = 20
 XML_NAMESPACES = {
@@ -64,22 +58,6 @@ XML_NAMESPACES = {
 URL_RE = re.compile(
     r"(?i)\b(?:https?://|www\.|discord\.gg/|discord(?:app)?\.com/invite/)\S+"
 )
-LEVEL_REWARD_ROLES = [
-    (1, "Battlefield Recruit [lvl 1]"),
-    (50, "Rising Warrior [lvl 50]"),
-    (100, "Elite Fighter [lvl 100]"),
-    (200, "King's Knight [lvl 200]"),
-    (300, "Dragon Knight [lvl 300]"),
-    (400, "Realm Conqueror [lvl 400]"),
-    (500, "Supreme Conqueror [lvl 500]"),
-    (600, "Rising Legend [lvl 600]"),
-    (700, "Legendary Warlord [lvl 700]"),
-    (800, "Mythic Champion [lvl 800]"),
-    (900, "Celestial Hero [lvl 900]"),
-    (950, "Celestial Emperor [lvl 950]"),
-    (990, "Divine Sovereign [lvl 990]"),
-    (1000, "King of Kings [lvl 1000]"),
-]
 
 
 @dataclass
@@ -93,6 +71,7 @@ class ModmailSession:
 
 @dataclass
 class ModLogEntry:
+    guild_id: Optional[int]
     action: str
     user_id: int
     moderator_id: int
@@ -122,21 +101,6 @@ class AntiRaidState:
     lockdown_until: Optional[datetime] = None
     manual_lockdown: bool = False
     last_trigger_count: int = 0
-
-
-@dataclass
-class LevelProgress:
-    xp: int = 0
-    messages: int = 0
-    last_message_at: Optional[datetime] = None
-
-
-@dataclass
-class InviteSnapshot:
-    code: str
-    uses: int
-    inviter_id: Optional[int] = None
-    channel_id: Optional[int] = None
 
 
 @dataclass
@@ -187,55 +151,6 @@ def parse_duration(value: str) -> Optional[timedelta]:
         "h": timedelta(hours=amount),
         "d": timedelta(days=amount),
     }[unit]
-
-
-def xp_for_level(level: int, xp_increment: int) -> int:
-    if level <= 0:
-        return 0
-    return xp_increment * level * (level + 1) // 2
-
-
-def level_from_xp(xp: int, xp_increment: int) -> int:
-    level = 0
-    while xp_for_level(level + 1, xp_increment) <= xp:
-        level += 1
-    return level
-
-
-def get_reward_role_name(level: int) -> Optional[str]:
-    reward_name: Optional[str] = None
-    for required_level, role_name in LEVEL_REWARD_ROLES:
-        if level >= required_level:
-            reward_name = role_name
-        else:
-            break
-    return reward_name
-
-
-def find_reward_role(guild: discord.Guild, role_name: str, required_level: int) -> Optional[discord.Role]:
-    exact_match = discord.utils.get(guild.roles, name=role_name)
-    if exact_match is not None:
-        return exact_match
-
-    level_marker = f"[lvl {required_level}]".lower()
-    normalized_target = role_name.lower()
-    for role in guild.roles:
-        normalized_name = role.name.lower()
-        if normalized_name == normalized_target:
-            return role
-        if level_marker in normalized_name:
-            return role
-    return None
-
-
-def is_reward_role(role: discord.Role) -> bool:
-    normalized_name = role.name.lower()
-    for required_level, role_name in LEVEL_REWARD_ROLES:
-        if normalized_name == role_name.lower():
-            return True
-        if f"[lvl {required_level}]".lower() in normalized_name:
-            return True
-    return False
 
 
 def make_embed(
@@ -650,9 +565,6 @@ class DyadiaGuardianBot(commands.Bot):
         self.staff_application_drafts: Dict[int, StaffApplicationDraft] = {}
         self.mod_logs: List[ModLogEntry] = []
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
-        self.level_data: Dict[int, Dict[int, LevelProgress]] = {}
-        self.invite_counts: Dict[int, Dict[int, int]] = {}
-        self.invite_cache: Dict[int, Dict[str, InviteSnapshot]] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
         self.no_link_channels: Dict[int, set[int]] = {}
         self.instagram_seen_ids: set[str] = set()
@@ -672,8 +584,6 @@ class DyadiaGuardianBot(commands.Bot):
     async def setup_hook(self) -> None:
         if self.uses_postgres:
             await asyncio.to_thread(self.ensure_postgres_schema)
-        await self.load_level_data()
-        await self.load_invite_data()
         await self.load_autoreact_data()
         await self.load_no_link_data()
         await self.load_instagram_state()
@@ -708,11 +618,34 @@ class DyadiaGuardianBot(commands.Bot):
                     )
                     cur.execute(
                         """
+                        CREATE INDEX IF NOT EXISTS mod_logs_guild_user_created_idx
+                        ON mod_logs (guild_id, user_id, created_at DESC)
+                        """
+                    )
+                    cur.execute(
+                        """
                         CREATE TABLE IF NOT EXISTS autoreact_configs (
                             guild_id BIGINT NOT NULL,
                             channel_id BIGINT NOT NULL,
                             emojis TEXT[] NOT NULL,
                             PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS no_link_channels (
+                            guild_id BIGINT NOT NULL,
+                            channel_id BIGINT NOT NULL,
+                            PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS instagram_state (
+                            state_key TEXT PRIMARY KEY,
+                            seen_ids TEXT[] NOT NULL DEFAULT '{}'
                         )
                         """
                     )
@@ -729,7 +662,6 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.info("Synced %s application commands", len(synced))
         await self.ensure_guild_member_caches()
         await self.validate_runtime_configuration()
-        await self.refresh_invite_caches()
         if not self.server_stats_logged_once:
             self.server_stats_logged_once = True
             await self.log_all_server_stats()
@@ -791,18 +723,11 @@ class DyadiaGuardianBot(commands.Bot):
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
 
-        if message.guild is not None and isinstance(message.author, discord.Member):
-            await self.handle_leveling_message(message)
-
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None:
             return
-        invite_info = await self.track_member_invite(member)
         await self.log_member_join(member)
-        if invite_info is not None:
-            await self.log_invite_join(member, invite_info)
         await self.handle_anti_raid_join(member)
-        await self.sync_level_reward_role(member, announce=False)
         await self.send_welcome_message(member)
 
     async def on_member_remove(self, member: discord.Member) -> None:
@@ -863,13 +788,9 @@ class DyadiaGuardianBot(commands.Bot):
 
     async def on_invite_create(self, invite: discord.Invite) -> None:
         await self.log_invite_create(invite)
-        if invite.guild is not None:
-            await self.cache_guild_invites(invite.guild)
 
     async def on_invite_delete(self, invite: discord.Invite) -> None:
         await self.log_invite_delete(invite)
-        if invite.guild is not None:
-            await self.cache_guild_invites(invite.guild)
 
     async def on_bulk_message_delete(self, messages: List[discord.Message]) -> None:
         await self.log_bulk_message_delete(messages)
@@ -936,7 +857,7 @@ class DyadiaGuardianBot(commands.Bot):
                     "`/addrole` add a role to a member\n"
                     "`/removerole` remove a role from a member\n"
                     "`/clear` bulk delete messages\n"
-                    "`/modlogs` view in-memory moderation history"
+                    "`/modlogs` view moderation history"
                 ),
                 inline=False,
             )
@@ -965,17 +886,6 @@ class DyadiaGuardianBot(commands.Bot):
                     "`/antiraid status` show protection status\n"
                     "`/antiraid on` or `/antiraid off` enable or disable monitoring\n"
                     "`/antiraid activate` or `/antiraid deactivate` control raid mode manually"
-                ),
-                inline=False,
-            )
-            embed.add_field(
-                name="Leveling",
-                value=(
-                    "`/rank` view your level card\n"
-                    "`/leaderboard` view the top XP members\n"
-                    "`/levelpanel` post the leveling system information panel\n"
-                    "`/invites` view invite count\n"
-                    "`/inviteleaderboard` view top inviters"
                 ),
                 inline=False,
             )
@@ -1079,7 +989,7 @@ class DyadiaGuardianBot(commands.Bot):
         ) -> None:
             await self.handle_clear(interaction, amount, user)
 
-        @tree.command(name="modlogs", description="Show recent in-memory moderation entries for a user")
+        @tree.command(name="modlogs", description="Show recent moderation entries for a user")
         @app_commands.describe(user="Member to inspect")
         async def modlogs(interaction: discord.Interaction, user: discord.User) -> None:
             await self.handle_modlogs(interaction, user)
@@ -1114,32 +1024,6 @@ class DyadiaGuardianBot(commands.Bot):
             channel: Optional[discord.TextChannel] = None,
         ) -> None:
             await self.handle_verification_panel(interaction, channel)
-
-        @tree.command(name="rank", description="Show your level and XP progress")
-        @app_commands.describe(user="Optional member to inspect")
-        async def rank(interaction: discord.Interaction, user: Optional[discord.Member] = None) -> None:
-            await self.handle_rank(interaction, user)
-
-        @tree.command(name="leaderboard", description="Show the server leveling leaderboard")
-        async def leaderboard(interaction: discord.Interaction) -> None:
-            await self.handle_leaderboard(interaction)
-
-        @tree.command(name="invites", description="Show how many joins a member has invited")
-        @app_commands.describe(user="Optional member to inspect")
-        async def invites(interaction: discord.Interaction, user: Optional[discord.Member] = None) -> None:
-            await self.handle_invites(interaction, user)
-
-        @tree.command(name="inviteleaderboard", description="Show the server invite leaderboard")
-        async def inviteleaderboard(interaction: discord.Interaction) -> None:
-            await self.handle_invite_leaderboard(interaction)
-
-        @tree.command(name="levelpanel", description="Post the leveling system info panel")
-        @app_commands.describe(channel="Channel where the leveling panel should be posted")
-        async def levelpanel(
-            interaction: discord.Interaction,
-            channel: Optional[discord.TextChannel] = None,
-        ) -> None:
-            await self.handle_level_panel(interaction, channel)
 
         @tree.command(name="embed", description="Open an embed builder and send it to a channel")
         @app_commands.describe(channel="Channel where the embed should be posted")
@@ -1488,45 +1372,6 @@ class DyadiaGuardianBot(commands.Bot):
         embed.add_field(name="Agreement", value=draft.commitment_and_declaration, inline=False)
         embed.set_thumbnail(url=user.display_avatar.url)
         embed.set_footer(text=BRAND_FOOTER)
-        return embed
-
-    def create_leveling_panel_embed(self, guild: discord.Guild) -> discord.Embed:
-        reward_lines = []
-        for required_level, role_name in LEVEL_REWARD_ROLES:
-            role = find_reward_role(guild, role_name, required_level)
-            role_display = role.mention if role is not None else role_name
-            reward_lines.append(f"Level {required_level} - {role_display}")
-
-        embed = make_embed(
-            "Honor Of Kings Northeast India Leveling System",
-            (
-                "This server uses a leveling system where members gain XP by chatting and participating in the "
-                "community. As you earn XP, you level up and unlock Honor of Kings themed ranks that show your "
-                "progress and activity in the server.\n\n"
-                "The more active you are, the higher your level becomes."
-            ),
-            discord.Color.magenta(),
-        )
-        embed.add_field(name="Rank Progression", value="\n".join(reward_lines), inline=False)
-        embed.add_field(
-            name="How To Level Up",
-            value=(
-                "- Chat and interact with other members\n"
-                "- Participate in discussions and community activities\n"
-                "- Stay active in the server"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="XP Rules",
-            value=(
-                f"- Gain {LEVEL_XP_GAIN_MIN}-{LEVEL_XP_GAIN_MAX} XP for active messages\n"
-                "- Every qualifying message can earn XP\n"
-                f"- Required XP increases by {self.settings.level_xp_increment} each level\n"
-                "- Only the most dedicated members will reach Level 1000"
-            ),
-            inline=False,
-        )
         return embed
 
     def create_modlog_embed(
@@ -2423,6 +2268,7 @@ class DyadiaGuardianBot(commands.Bot):
         duration_text: Optional[str] = None,
     ) -> None:
         entry = ModLogEntry(
+            guild_id=guild_id,
             action=action,
             user_id=target.id,
             moderator_id=moderator.id,
@@ -2431,26 +2277,15 @@ class DyadiaGuardianBot(commands.Bot):
         )
         self.mod_logs.append(entry)
         if self.uses_postgres and guild_id is not None:
-            await asyncio.to_thread(self.persist_modlog, guild_id, entry)
+            await asyncio.to_thread(self.persist_modlog, entry)
 
-    def persist_modlog(self, guild_id: int, entry: ModLogEntry) -> None:
+    def persist_modlog(self, entry: ModLogEntry) -> None:
+        if entry.guild_id is None:
+            return
+
         try:
             with psycopg.connect(self.settings.database_url) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS mod_logs (
-                            id BIGSERIAL PRIMARY KEY,
-                            guild_id BIGINT NOT NULL,
-                            user_id BIGINT NOT NULL,
-                            moderator_id BIGINT NOT NULL,
-                            action TEXT NOT NULL,
-                            reason TEXT NOT NULL,
-                            duration_text TEXT NULL,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                        )
-                        """
-                    )
                     cur.execute(
                         """
                         INSERT INTO mod_logs (
@@ -2465,7 +2300,7 @@ class DyadiaGuardianBot(commands.Bot):
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            guild_id,
+                            entry.guild_id,
                             entry.user_id,
                             entry.moderator_id,
                             entry.action,
@@ -2476,7 +2311,7 @@ class DyadiaGuardianBot(commands.Bot):
                     )
                 conn.commit()
         except Exception:
-            LOGGER.exception("Failed to persist moderation log for guild=%s user=%s", guild_id, entry.user_id)
+            LOGGER.exception("Failed to persist moderation log for guild=%s user=%s", entry.guild_id, entry.user_id)
 
     def load_modlogs_from_postgres(self, guild_id: int, user_id: int, *, limit: int = 10) -> List[ModLogEntry]:
         entries: List[ModLogEntry] = []
@@ -2485,21 +2320,7 @@ class DyadiaGuardianBot(commands.Bot):
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        CREATE TABLE IF NOT EXISTS mod_logs (
-                            id BIGSERIAL PRIMARY KEY,
-                            guild_id BIGINT NOT NULL,
-                            user_id BIGINT NOT NULL,
-                            moderator_id BIGINT NOT NULL,
-                            action TEXT NOT NULL,
-                            reason TEXT NOT NULL,
-                            duration_text TEXT NULL,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                        )
-                        """
-                    )
-                    cur.execute(
-                        """
-                        SELECT action, user_id, moderator_id, reason, created_at, duration_text
+                        SELECT guild_id, action, user_id, moderator_id, reason, created_at, duration_text
                         FROM mod_logs
                         WHERE guild_id = %s AND user_id = %s
                         ORDER BY created_at DESC
@@ -2507,9 +2328,10 @@ class DyadiaGuardianBot(commands.Bot):
                         """,
                         (guild_id, user_id, limit),
                     )
-                    for action, row_user_id, moderator_id, reason, created_at, duration_text in cur.fetchall():
+                    for row_guild_id, action, row_user_id, moderator_id, reason, created_at, duration_text in cur.fetchall():
                         entries.append(
                             ModLogEntry(
+                                guild_id=int(row_guild_id),
                                 action=str(action),
                                 user_id=int(row_user_id),
                                 moderator_id=int(moderator_id),
@@ -2523,184 +2345,21 @@ class DyadiaGuardianBot(commands.Bot):
             return []
         return entries
 
-    async def load_invite_data(self) -> None:
-        self.invite_counts = await asyncio.to_thread(self._load_invite_data_sync)
-
-    def _load_invite_data_sync(self) -> Dict[int, Dict[int, int]]:
-        if self.uses_postgres:
-            return self._load_invite_data_from_postgres()
-        return self._load_invite_data_from_json()
-
-    def _load_invite_data_from_json(self) -> Dict[int, Dict[int, int]]:
-        loaded_data: Dict[int, Dict[int, int]] = {}
-        if not INVITE_DATA_PATH.exists():
-            LOGGER.info("Invite data file %s not found. A new one will be created on first tracked invite.", INVITE_DATA_PATH)
-            return loaded_data
-
-        try:
-            raw = json.loads(INVITE_DATA_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            LOGGER.exception("Failed to load invite data from %s", INVITE_DATA_PATH)
-            return loaded_data
-
-        for guild_id, members in (raw if isinstance(raw, dict) else {}).items():
-            try:
-                parsed_guild_id = int(guild_id)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(members, dict):
-                continue
-            guild_counts: Dict[int, int] = {}
-            for user_id, count in members.items():
-                try:
-                    guild_counts[int(user_id)] = max(0, int(count))
-                except (TypeError, ValueError):
-                    continue
-            loaded_data[parsed_guild_id] = guild_counts
-
-        LOGGER.info("Loaded invite data for %s guild(s) from %s", len(loaded_data), INVITE_DATA_PATH)
-        return loaded_data
-
-    def _load_invite_data_from_postgres(self) -> Dict[int, Dict[int, int]]:
-        loaded_data: Dict[int, Dict[int, int]] = {}
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS invite_counts (
-                            guild_id BIGINT NOT NULL,
-                            inviter_id BIGINT NOT NULL,
-                            joins INTEGER NOT NULL DEFAULT 0,
-                            PRIMARY KEY (guild_id, inviter_id)
-                        )
-                        """
-                    )
-                    cur.execute(
-                        """
-                        SELECT guild_id, inviter_id, joins
-                        FROM invite_counts
-                        """
-                    )
-                    for guild_id, inviter_id, joins in cur.fetchall():
-                        guild_counts = loaded_data.setdefault(int(guild_id), {})
-                        guild_counts[int(inviter_id)] = max(0, int(joins))
-                conn.commit()
-        except Exception:
-            LOGGER.exception("Failed to load invite data from PostgreSQL.")
-            return {}
-
-        LOGGER.info("Loaded invite data for %s guild(s) from PostgreSQL", len(loaded_data))
-        return loaded_data
-
-    def save_invite_data(self) -> None:
-        if self.uses_postgres:
-            return
-        serialized = {
-            str(guild_id): {str(user_id): count for user_id, count in members.items()}
-            for guild_id, members in self.invite_counts.items()
-        }
-        try:
-            INVITE_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
-        except OSError:
-            LOGGER.exception("Failed to save invite data to %s", INVITE_DATA_PATH)
-
-    async def persist_invite_count(self, guild_id: int, inviter_id: int, joins: int) -> None:
-        if self.uses_postgres:
-            await asyncio.to_thread(self._persist_invite_count_postgres, guild_id, inviter_id, joins)
-            return
-        await asyncio.to_thread(self.save_invite_data)
-
-    def _persist_invite_count_postgres(self, guild_id: int, inviter_id: int, joins: int) -> None:
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO invite_counts (guild_id, inviter_id, joins)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (guild_id, inviter_id) DO UPDATE
-                        SET joins = EXCLUDED.joins
-                        """,
-                        (guild_id, inviter_id, joins),
-                    )
-                conn.commit()
-        except Exception:
-            LOGGER.exception("Failed to persist invite count for guild=%s inviter=%s", guild_id, inviter_id)
-
-    def get_invite_count(self, guild_id: int, inviter_id: int) -> int:
-        return self.invite_counts.setdefault(guild_id, {}).get(inviter_id, 0)
-
-    async def increment_invite_count(self, guild_id: int, inviter_id: int) -> int:
-        guild_counts = self.invite_counts.setdefault(guild_id, {})
-        guild_counts[inviter_id] = guild_counts.get(inviter_id, 0) + 1
-        await self.persist_invite_count(guild_id, inviter_id, guild_counts[inviter_id])
-        return guild_counts[inviter_id]
-
-    def snapshot_invite(self, invite: discord.Invite) -> InviteSnapshot:
-        return InviteSnapshot(
-            code=invite.code,
-            uses=invite.uses or 0,
-            inviter_id=invite.inviter.id if invite.inviter is not None else None,
-            channel_id=invite.channel.id if invite.channel is not None else None,
-        )
-
-    async def cache_guild_invites(self, guild: discord.Guild) -> None:
-        try:
-            invites = await guild.invites()
-        except discord.Forbidden:
-            LOGGER.warning("Missing Manage Server permission to track invites in %s (%s)", guild.name, guild.id)
-            self.invite_cache.setdefault(guild.id, {})
-            return
-        except discord.HTTPException:
-            LOGGER.exception("Could not fetch invites for %s (%s)", guild.name, guild.id)
-            self.invite_cache.setdefault(guild.id, {})
-            return
-
-        self.invite_cache[guild.id] = {invite.code: self.snapshot_invite(invite) for invite in invites}
-        LOGGER.info("Cached %s invite(s) for %s (%s)", len(invites), guild.name, guild.id)
-
-    async def refresh_invite_caches(self) -> None:
-        for guild in self.guilds:
-            await self.cache_guild_invites(guild)
-
-    async def track_member_invite(self, member: discord.Member) -> Optional[str]:
-        before_cache = self.invite_cache.get(member.guild.id, {})
-        try:
-            current_invites = await member.guild.invites()
-        except discord.Forbidden:
-            LOGGER.warning("Missing Manage Server permission to detect invite used by %s (%s)", member, member.id)
-            return None
-        except discord.HTTPException:
-            LOGGER.exception("Could not detect invite used by %s (%s)", member, member.id)
-            return None
-
-        after_cache = {invite.code: self.snapshot_invite(invite) for invite in current_invites}
-        used_invite: Optional[InviteSnapshot] = None
-        highest_delta = 0
-        for code, after_snapshot in after_cache.items():
-            before_snapshot = before_cache.get(code)
-            before_uses = before_snapshot.uses if before_snapshot is not None else after_snapshot.uses
-            delta = after_snapshot.uses - before_uses
-            if delta > highest_delta:
-                highest_delta = delta
-                used_invite = after_snapshot
-
-        self.invite_cache[member.guild.id] = after_cache
-        if used_invite is None or used_invite.inviter_id is None:
-            return None
-
-        total_joins = await self.increment_invite_count(member.guild.id, used_invite.inviter_id)
-        inviter_text = f"<@{used_invite.inviter_id}>"
-        channel_text = f"<#{used_invite.channel_id}>" if used_invite.channel_id is not None else "Unknown channel"
-        return f"Code `{used_invite.code}` from {inviter_text} in {channel_text}\nInviter total: **{total_joins}**"
-
     async def load_autoreact_data(self) -> None:
         self.autoreact_configs = await asyncio.to_thread(self._load_autoreact_data_sync)
 
     def _load_autoreact_data_sync(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
         if self.uses_postgres:
-            return self._load_autoreact_data_from_postgres()
+            loaded_data = self._load_autoreact_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_autoreact_data_from_json()
+            if fallback_data:
+                self._save_autoreact_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL auto-reaction data from %s", AUTOREACT_DATA_PATH)
+            return fallback_data
+
         return self._load_autoreact_data_from_json()
 
     def _load_autoreact_data_from_json(self) -> Dict[int, Dict[int, AutoReactionConfig]]:
@@ -2753,23 +2412,14 @@ class DyadiaGuardianBot(commands.Bot):
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        CREATE TABLE IF NOT EXISTS autoreact_configs (
-                            guild_id BIGINT NOT NULL,
-                            channel_id BIGINT NOT NULL,
-                            emojis TEXT[] NOT NULL,
-                            PRIMARY KEY (guild_id, channel_id)
-                        )
-                        """
-                    )
-                    cur.execute(
-                        """
                         SELECT guild_id, channel_id, emojis
                         FROM autoreact_configs
                         """
                     )
                     for guild_id, channel_id, raw_emojis in cur.fetchall():
                         parsed_emojis: List[str] = []
-                        for raw_emoji in raw_emojis if isinstance(raw_emojis, list) else []:
+                        raw_list = raw_emojis if isinstance(raw_emojis, list) else []
+                        for raw_emoji in raw_list:
                             emoji = self.normalize_autoreact_emoji(str(raw_emoji))
                             if emoji is not None and emoji not in parsed_emojis:
                                 parsed_emojis.append(emoji)
@@ -2777,7 +2427,6 @@ class DyadiaGuardianBot(commands.Bot):
                             continue
                         guild_configs = loaded_data.setdefault(int(guild_id), {})
                         guild_configs[int(channel_id)] = AutoReactionConfig(emojis=parsed_emojis)
-                conn.commit()
         except Exception:
             LOGGER.exception("Failed to load auto-reaction data from PostgreSQL.")
             return {}
@@ -2787,43 +2436,33 @@ class DyadiaGuardianBot(commands.Bot):
 
     def save_autoreact_data(self) -> None:
         if self.uses_postgres:
-            self._save_autoreact_data_to_postgres()
+            self._save_autoreact_data_to_postgres(self.autoreact_configs)
             return
-        self._save_autoreact_data_to_json()
+        self._save_autoreact_data_to_json(self.autoreact_configs)
 
-    def _save_autoreact_data_to_json(self) -> None:
+    def _save_autoreact_data_to_json(self, configs: Dict[int, Dict[int, AutoReactionConfig]]) -> None:
         serialized = {
             str(guild_id): {
                 str(channel_id): config.emojis
                 for channel_id, config in channel_configs.items()
             }
-            for guild_id, channel_configs in self.autoreact_configs.items()
+            for guild_id, channel_configs in configs.items()
         }
         try:
             AUTOREACT_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
         except OSError:
             LOGGER.exception("Failed to save auto-reaction data to %s", AUTOREACT_DATA_PATH)
 
-    def _save_autoreact_data_to_postgres(self) -> None:
+    def _save_autoreact_data_to_postgres(self, configs: Dict[int, Dict[int, AutoReactionConfig]]) -> None:
         rows = [
             (guild_id, channel_id, config.emojis)
-            for guild_id, channel_configs in self.autoreact_configs.items()
+            for guild_id, channel_configs in configs.items()
             for channel_id, config in channel_configs.items()
             if config.emojis
         ]
         try:
             with psycopg.connect(self.settings.database_url) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS autoreact_configs (
-                            guild_id BIGINT NOT NULL,
-                            channel_id BIGINT NOT NULL,
-                            emojis TEXT[] NOT NULL,
-                            PRIMARY KEY (guild_id, channel_id)
-                        )
-                        """
-                    )
                     cur.execute("DELETE FROM autoreact_configs")
                     if rows:
                         cur.executemany(
@@ -2865,6 +2504,20 @@ class DyadiaGuardianBot(commands.Bot):
         self.no_link_channels = await asyncio.to_thread(self._load_no_link_data_sync)
 
     def _load_no_link_data_sync(self) -> Dict[int, set[int]]:
+        if self.uses_postgres:
+            loaded_data = self._load_no_link_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_no_link_data_from_json()
+            if fallback_data:
+                self._save_no_link_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL no-link data from %s", NO_LINK_DATA_PATH)
+            return fallback_data
+
+        return self._load_no_link_data_from_json()
+
+    def _load_no_link_data_from_json(self) -> Dict[int, set[int]]:
         loaded_data: Dict[int, set[int]] = {}
         if not NO_LINK_DATA_PATH.exists():
             LOGGER.info("No-link data file %s not found. A new one will be created on first activation.", NO_LINK_DATA_PATH)
@@ -2895,16 +2548,64 @@ class DyadiaGuardianBot(commands.Bot):
         LOGGER.info("Loaded no-link channel data for %s guild(s) from %s", len(loaded_data), NO_LINK_DATA_PATH)
         return loaded_data
 
+    def _load_no_link_data_from_postgres(self) -> Dict[int, set[int]]:
+        loaded_data: Dict[int, set[int]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT guild_id, channel_id
+                        FROM no_link_channels
+                        """
+                    )
+                    for guild_id, channel_id in cur.fetchall():
+                        loaded_data.setdefault(int(guild_id), set()).add(int(channel_id))
+        except Exception:
+            LOGGER.exception("Failed to load no-link data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded no-link channel data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
     def save_no_link_data(self) -> None:
+        if self.uses_postgres:
+            self._save_no_link_data_to_postgres(self.no_link_channels)
+            return
+        self._save_no_link_data_to_json(self.no_link_channels)
+
+    def _save_no_link_data_to_json(self, no_link_channels: Dict[int, set[int]]) -> None:
         serialized = {
             str(guild_id): sorted(channel_ids)
-            for guild_id, channel_ids in self.no_link_channels.items()
+            for guild_id, channel_ids in no_link_channels.items()
             if channel_ids
         }
         try:
             NO_LINK_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
         except OSError:
             LOGGER.exception("Failed to save no-link data to %s", NO_LINK_DATA_PATH)
+
+    def _save_no_link_data_to_postgres(self, no_link_channels: Dict[int, set[int]]) -> None:
+        rows = [
+            (guild_id, channel_id)
+            for guild_id, channel_ids in no_link_channels.items()
+            for channel_id in sorted(channel_ids)
+        ]
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM no_link_channels")
+                    if rows:
+                        cur.executemany(
+                            """
+                            INSERT INTO no_link_channels (guild_id, channel_id)
+                            VALUES (%s, %s)
+                            """,
+                            rows,
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save no-link data to PostgreSQL.")
 
     async def persist_no_link_data(self) -> None:
         await asyncio.to_thread(self.save_no_link_data)
@@ -2944,304 +2645,6 @@ class DyadiaGuardianBot(commands.Bot):
         except discord.HTTPException:
             LOGGER.warning("Failed to send no-link warning in channel %s", message.channel.id)
         return True
-
-    async def load_level_data(self) -> None:
-        self.level_data = await asyncio.to_thread(self._load_level_data_sync)
-
-    def _load_level_data_sync(self) -> Dict[int, Dict[int, LevelProgress]]:
-        if self.uses_postgres:
-            return self._load_level_data_from_postgres()
-        return self._load_level_data_from_json()
-
-    def _load_level_data_from_json(self) -> Dict[int, Dict[int, LevelProgress]]:
-        loaded_data: Dict[int, Dict[int, LevelProgress]] = {}
-        if not LEVEL_DATA_PATH.exists():
-            LOGGER.info("Leveling data file %s not found. A new one will be created on first XP update.", LEVEL_DATA_PATH)
-            return loaded_data
-
-        try:
-            raw = json.loads(LEVEL_DATA_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            LOGGER.exception("Failed to load leveling data from %s", LEVEL_DATA_PATH)
-            return loaded_data
-
-        guilds = raw if isinstance(raw, dict) else {}
-        for guild_id, members in guilds.items():
-            parsed_guild = self._parse_leveling_guild_payload(guild_id, members)
-            if parsed_guild is not None:
-                loaded_data[parsed_guild[0]] = parsed_guild[1]
-
-        LOGGER.info("Loaded leveling data for %s guild(s) from %s", len(loaded_data), LEVEL_DATA_PATH)
-        return loaded_data
-
-    def _load_level_data_from_postgres(self) -> Dict[int, Dict[int, LevelProgress]]:
-        loaded_data: Dict[int, Dict[int, LevelProgress]] = {}
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS level_progress (
-                            guild_id BIGINT NOT NULL,
-                            user_id BIGINT NOT NULL,
-                            xp INTEGER NOT NULL DEFAULT 0,
-                            messages INTEGER NOT NULL DEFAULT 0,
-                            last_message_at TIMESTAMPTZ NULL,
-                            PRIMARY KEY (guild_id, user_id)
-                        )
-                        """
-                    )
-                    cur.execute(
-                        """
-                        SELECT guild_id, user_id, xp, messages, last_message_at
-                        FROM level_progress
-                        """
-                    )
-                    for guild_id, user_id, xp, messages, last_message_at in cur.fetchall():
-                        guild_progress = loaded_data.setdefault(int(guild_id), {})
-                        guild_progress[int(user_id)] = LevelProgress(
-                            xp=max(0, int(xp)),
-                            messages=max(0, int(messages)),
-                            last_message_at=last_message_at,
-                        )
-        except Exception:
-            LOGGER.exception("Failed to load leveling data from PostgreSQL.")
-            return {}
-
-        LOGGER.info("Loaded leveling data for %s guild(s) from PostgreSQL", len(loaded_data))
-        return loaded_data
-
-    def _parse_leveling_guild_payload(
-        self,
-        guild_id: object,
-        members: object,
-    ) -> Optional[tuple[int, Dict[int, LevelProgress]]]:
-        try:
-            parsed_guild_id = int(guild_id)
-        except (TypeError, ValueError):
-            return None
-
-        guild_progress: Dict[int, LevelProgress] = {}
-        if not isinstance(members, dict):
-            return parsed_guild_id, guild_progress
-
-        for user_id, payload in members.items():
-            try:
-                parsed_user_id = int(user_id)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-
-            last_message_at = None
-            raw_last_message_at = payload.get("last_message_at")
-            if isinstance(raw_last_message_at, str):
-                try:
-                    last_message_at = datetime.fromisoformat(raw_last_message_at)
-                except ValueError:
-                    last_message_at = None
-
-            guild_progress[parsed_user_id] = LevelProgress(
-                xp=max(0, int(payload.get("xp", 0) or 0)),
-                messages=max(0, int(payload.get("messages", 0) or 0)),
-                last_message_at=last_message_at,
-            )
-
-        return parsed_guild_id, guild_progress
-
-    def save_level_data(self) -> None:
-        if self.uses_postgres:
-            return
-        serialized: Dict[str, Dict[str, Dict[str, object]]] = {}
-        for guild_id, members in self.level_data.items():
-            serialized[str(guild_id)] = {}
-            for user_id, progress in members.items():
-                serialized[str(guild_id)][str(user_id)] = {
-                    "xp": progress.xp,
-                    "messages": progress.messages,
-                    "last_message_at": progress.last_message_at.isoformat() if progress.last_message_at else None,
-                }
-
-        try:
-            LEVEL_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
-        except OSError:
-            LOGGER.exception("Failed to save leveling data to %s", LEVEL_DATA_PATH)
-
-    async def persist_level_progress(self, guild_id: int, user_id: int, progress: LevelProgress) -> None:
-        if self.uses_postgres:
-            await asyncio.to_thread(self._persist_level_progress_postgres, guild_id, user_id, progress)
-            return
-        await asyncio.to_thread(self.save_level_data)
-
-    def _persist_level_progress_postgres(self, guild_id: int, user_id: int, progress: LevelProgress) -> None:
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO level_progress (guild_id, user_id, xp, messages, last_message_at)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (guild_id, user_id) DO UPDATE
-                        SET xp = EXCLUDED.xp,
-                            messages = EXCLUDED.messages,
-                            last_message_at = EXCLUDED.last_message_at
-                        """,
-                        (guild_id, user_id, progress.xp, progress.messages, progress.last_message_at),
-                    )
-                conn.commit()
-        except Exception:
-            LOGGER.exception("Failed to persist leveling progress for guild=%s user=%s", guild_id, user_id)
-
-    def get_level_progress(self, guild_id: int, user_id: int) -> LevelProgress:
-        guild_progress = self.level_data.setdefault(guild_id, {})
-        progress = guild_progress.get(user_id)
-        if progress is None:
-            progress = LevelProgress()
-            guild_progress[user_id] = progress
-        return progress
-
-    def get_next_reward_role_name(self, level: int) -> Optional[str]:
-        for required_level, role_name in LEVEL_REWARD_ROLES:
-            if level < required_level:
-                return role_name
-        return None
-
-    async def sync_level_reward_role(self, member: discord.Member, *, announce: bool) -> None:
-        progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
-        eligible_role_name = get_reward_role_name(level)
-        roles_to_remove = [role for role in member.roles if is_reward_role(role)]
-        eligible_level = next((required_level for required_level, role_name in LEVEL_REWARD_ROLES if role_name == eligible_role_name), None)
-        role_to_add = (
-            find_reward_role(member.guild, eligible_role_name, eligible_level)
-            if eligible_role_name is not None and eligible_level is not None
-            else None
-        )
-        if role_to_add is not None and role_to_add in roles_to_remove:
-            roles_to_remove.remove(role_to_add)
-
-        if role_to_add is not None and member.guild.me is not None and role_to_add >= member.guild.me.top_role:
-            LOGGER.warning("Cannot assign leveling role %s because it is above the bot's top role.", role_to_add.name)
-            role_to_add = None
-
-        if roles_to_remove:
-            removable_roles = [role for role in roles_to_remove if member.guild.me is None or role < member.guild.me.top_role]
-            if removable_roles:
-                try:
-                    await member.remove_roles(*removable_roles, reason="Leveling role update")
-                except discord.HTTPException:
-                    LOGGER.exception("Failed to remove old leveling roles from %s", member.id)
-
-        if role_to_add is not None and role_to_add not in member.roles:
-            try:
-                await member.add_roles(role_to_add, reason="Leveling reward role earned")
-            except discord.HTTPException:
-                LOGGER.exception("Failed to add leveling role %s to %s", role_to_add.id, member.id)
-                return
-
-            if announce:
-                try:
-                    await member.send(
-                        embed=make_embed(
-                            "New Rank Unlocked",
-                            f"You reached **Level {level}** in **{member.guild.name}** and unlocked **{role_to_add.name}**.",
-                            discord.Color.gold(),
-                        )
-                    )
-                except discord.HTTPException:
-                    LOGGER.warning("Could not DM %s about their new leveling role.", member.id)
-
-    async def award_message_xp(self, member: discord.Member) -> Optional[tuple[int, int]]:
-        now = utc_now()
-        progress = self.get_level_progress(member.guild.id, member.id)
-        old_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
-        gained_xp = random.randint(LEVEL_XP_GAIN_MIN, LEVEL_XP_GAIN_MAX)
-        progress.xp += gained_xp
-        progress.messages += 1
-        progress.last_message_at = now
-        await self.persist_level_progress(member.guild.id, member.id, progress)
-
-        new_level = level_from_xp(progress.xp, self.settings.level_xp_increment)
-        return old_level, new_level
-
-    async def handle_leveling_message(self, message: discord.Message) -> None:
-        if not isinstance(message.author, discord.Member):
-            return
-        if isinstance(message.channel, discord.Thread) and MODMAIL_THREAD_RE.match(message.channel.name):
-            return
-        if len(message.content.strip()) < 3:
-            return
-
-        result = await self.award_message_xp(message.author)
-        if result is None:
-            return
-
-        old_level, new_level = result
-        if new_level <= old_level:
-            return
-
-        await self.sync_level_reward_role(message.author, announce=True)
-        next_reward = self.get_next_reward_role_name(new_level)
-        embed = make_embed(
-            "Level Up",
-            f"{message.author.mention} reached **Level {new_level}**.",
-            discord.Color.gold(),
-        )
-        if next_reward:
-            embed.add_field(name="Next Rank", value=next_reward, inline=False)
-        await self.send_level_up_announcement(message.guild, message.channel, embed)
-
-    async def send_level_up_announcement(
-        self,
-        guild: discord.Guild,
-        fallback_channel: discord.abc.Messageable,
-        embed: discord.Embed,
-    ) -> None:
-        if self.settings.level_up_channel_id:
-            try:
-                channel = self.get_channel(self.settings.level_up_channel_id)
-                if channel is None:
-                    channel = await self.fetch_channel(self.settings.level_up_channel_id)
-                if isinstance(channel, discord.TextChannel):
-                    await channel.send(embed=embed)
-                    return
-                LOGGER.warning(
-                    "LEVEL_UP_CHANNEL_ID is not a text channel: %s",
-                    self.settings.level_up_channel_id,
-                )
-            except discord.HTTPException:
-                LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
-
-        if isinstance(fallback_channel, (discord.TextChannel, discord.Thread)):
-            await fallback_channel.send(embed=embed, delete_after=20)
-
-    def create_rank_embed(self, member: discord.Member) -> discord.Embed:
-        progress = self.get_level_progress(member.guild.id, member.id)
-        level = level_from_xp(progress.xp, self.settings.level_xp_increment)
-        current_level_xp = xp_for_level(level, self.settings.level_xp_increment)
-        next_level_xp = xp_for_level(level + 1, self.settings.level_xp_increment)
-        xp_into_level = progress.xp - current_level_xp
-        xp_needed = max(1, next_level_xp - current_level_xp)
-        reward_name = get_reward_role_name(level) or "Unranked"
-        next_reward = self.get_next_reward_role_name(level)
-
-        embed = make_embed(
-            f"{member.display_name}'s Rank",
-            f"Current title: **{reward_name}**",
-            discord.Color.blurple(),
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Level", value=str(level), inline=True)
-        embed.add_field(name="Total XP", value=str(progress.xp), inline=True)
-        embed.add_field(name="Messages", value=str(progress.messages), inline=True)
-        embed.add_field(name="Progress", value=f"{xp_into_level}/{xp_needed} XP", inline=True)
-        embed.add_field(
-            name="Next Level",
-            value=f"Level {level + 1} at {next_level_xp} total XP",
-            inline=True,
-        )
-        embed.add_field(name="Next Rank Reward", value=next_reward or "Top rank reached", inline=True)
-        return embed
 
     async def ensure_staff(self, interaction: discord.Interaction, permission: str) -> bool:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -3329,6 +2732,20 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_seen_ids = set(self.instagram_seen_order)
 
     def _load_instagram_state_sync(self) -> List[str]:
+        if self.uses_postgres:
+            seen_order = self._load_instagram_state_from_postgres()
+            if seen_order:
+                return seen_order
+
+            fallback_seen_order = self._load_instagram_state_from_json()
+            if fallback_seen_order:
+                self._save_instagram_state_to_postgres(fallback_seen_order)
+                LOGGER.info("Seeded PostgreSQL Instagram state from %s", INSTAGRAM_STATE_PATH)
+            return fallback_seen_order
+
+        return self._load_instagram_state_from_json()
+
+    def _load_instagram_state_from_json(self) -> List[str]:
         try:
             raw = json.loads(INSTAGRAM_STATE_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -3348,11 +2765,63 @@ class DyadiaGuardianBot(commands.Bot):
         return normalized
 
     def save_instagram_state(self) -> None:
-        payload = {"seen_ids": self.instagram_seen_order[-INSTAGRAM_STATE_LIMIT:]}
+        if self.uses_postgres:
+            self._save_instagram_state_to_postgres(self.instagram_seen_order)
+            return
+        self._save_instagram_state_to_json(self.instagram_seen_order)
+
+    def _load_instagram_state_from_postgres(self) -> List[str]:
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT seen_ids
+                        FROM instagram_state
+                        WHERE state_key = %s
+                        """,
+                        ("default",),
+                    )
+                    row = cur.fetchone()
+        except Exception:
+            LOGGER.exception("Failed to load Instagram notification state from PostgreSQL.")
+            return []
+
+        if row is None:
+            return []
+
+        raw_seen_ids = row[0]
+        normalized: List[str] = []
+        for item in raw_seen_ids if isinstance(raw_seen_ids, list) else []:
+            if isinstance(item, str) and item and item not in normalized:
+                normalized.append(item)
+        LOGGER.info("Loaded Instagram notification state from PostgreSQL with %s seen item(s).", len(normalized))
+        return normalized
+
+    def _save_instagram_state_to_json(self, seen_order: List[str]) -> None:
+        payload = {"seen_ids": seen_order[-INSTAGRAM_STATE_LIMIT:]}
         try:
             INSTAGRAM_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except OSError:
             LOGGER.exception("Failed to save Instagram notification state.")
+
+    def _save_instagram_state_to_postgres(self, seen_order: List[str]) -> None:
+        normalized = seen_order[-INSTAGRAM_STATE_LIMIT:]
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO instagram_state (state_key, seen_ids)
+                        VALUES (%s, %s)
+                        ON CONFLICT (state_key) DO UPDATE
+                        SET seen_ids = EXCLUDED.seen_ids
+                        """,
+                        ("default", normalized),
+                    )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save Instagram notification state to PostgreSQL.")
 
     async def persist_instagram_state(self) -> None:
         await asyncio.to_thread(self.save_instagram_state)
@@ -3846,10 +3315,15 @@ class DyadiaGuardianBot(commands.Bot):
         if not await self.ensure_staff(interaction, "moderate_members"):
             return
 
-        if interaction.guild is not None and self.uses_postgres:
+        if self.uses_postgres and interaction.guild is not None:
             related = await asyncio.to_thread(self.load_modlogs_from_postgres, interaction.guild.id, user.id, limit=10)
         else:
-            related = [entry for entry in reversed(self.mod_logs) if entry.user_id == user.id][:10]
+            guild_id = interaction.guild.id if interaction.guild is not None else None
+            related = [
+                entry
+                for entry in reversed(self.mod_logs)
+                if entry.user_id == user.id and (guild_id is None or entry.guild_id == guild_id)
+            ][:10]
         description = "\n".join(
             f"`{entry.action}` by <@{entry.moderator_id}> - {entry.reason}"
             + (f" ({entry.duration_text})" if entry.duration_text else "")
@@ -3862,111 +3336,6 @@ class DyadiaGuardianBot(commands.Bot):
             discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def handle_rank(self, interaction: discord.Interaction, user: Optional[discord.Member]) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
-            return
-
-        target = user or interaction.user
-        if not isinstance(target, discord.Member):
-            await interaction.response.send_message("I could not resolve that member in this server.", ephemeral=True)
-            return
-
-        await interaction.response.send_message(embed=self.create_rank_embed(target), ephemeral=True)
-
-    async def handle_leaderboard(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
-            return
-
-        guild_progress = self.level_data.get(interaction.guild.id, {})
-        ranked_members = sorted(guild_progress.items(), key=lambda item: item[1].xp, reverse=True)[:LEADERBOARD_LIMIT]
-        if not ranked_members:
-            await interaction.response.send_message("Nobody has earned XP yet.", ephemeral=True)
-            return
-
-        lines = []
-        for index, (user_id, progress) in enumerate(ranked_members, start=1):
-            member = interaction.guild.get_member(user_id)
-            display_name = member.display_name if member is not None else f"User {user_id}"
-            lines.append(
-                f"**#{index}** {display_name} - Level {level_from_xp(progress.xp, self.settings.level_xp_increment)} ({progress.xp} XP)"
-            )
-
-        embed = make_embed(
-            "Leveling Leaderboard",
-            "\n".join(lines),
-            discord.Color.gold(),
-        )
-        await interaction.response.send_message(embed=embed)
-
-    async def handle_invites(self, interaction: discord.Interaction, user: Optional[discord.Member]) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
-            return
-
-        target = user or interaction.user
-        if not isinstance(target, discord.Member):
-            await interaction.response.send_message("I could not resolve that member in this server.", ephemeral=True)
-            return
-
-        invite_count = self.get_invite_count(interaction.guild.id, target.id)
-        embed = make_embed(
-            "Invite Count",
-            f"{target.mention} has invited **{invite_count}** member{'s' if invite_count != 1 else ''}.",
-            discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    async def handle_invite_leaderboard(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
-            return
-
-        guild_counts = self.invite_counts.get(interaction.guild.id, {})
-        ranked_inviters = sorted(guild_counts.items(), key=lambda item: item[1], reverse=True)[:LEADERBOARD_LIMIT]
-        if not ranked_inviters:
-            await interaction.response.send_message("No tracked invite joins yet.", ephemeral=True)
-            return
-
-        lines = []
-        for index, (user_id, joins) in enumerate(ranked_inviters, start=1):
-            member = interaction.guild.get_member(user_id)
-            display_name = member.display_name if member is not None else f"User {user_id}"
-            lines.append(f"**#{index}** {display_name} - {joins} invite{'s' if joins != 1 else ''}")
-
-        embed = make_embed(
-            "Invite Leaderboard",
-            "\n".join(lines),
-            discord.Color.gold(),
-        )
-        await interaction.response.send_message(embed=embed)
-
-    async def handle_level_panel(
-        self,
-        interaction: discord.Interaction,
-        channel: Optional[discord.TextChannel],
-    ) -> None:
-        if not await self.ensure_staff(interaction, "manage_guild"):
-            return
-        if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
-            return
-
-        target_channel = channel
-        if target_channel is None:
-            if isinstance(interaction.channel, discord.TextChannel):
-                target_channel = interaction.channel
-            else:
-                await interaction.response.send_message("Please choose a text channel for the leveling panel.", ephemeral=True)
-                return
-
-        await target_channel.send(embed=self.create_leveling_panel_embed(interaction.guild))
-        await interaction.response.send_message(
-            f"Leveling panel posted in {target_channel.mention}.",
-            ephemeral=True,
-        )
 
     async def handle_qotd(
         self,
@@ -5013,27 +4382,6 @@ class DyadiaGuardianBot(commands.Bot):
                 self.settings.staff_application_channel_id,
             )
 
-        if self.settings.level_up_channel_id:
-            try:
-                level_up_channel = self.get_channel(self.settings.level_up_channel_id) or await self.fetch_channel(
-                    self.settings.level_up_channel_id
-                )
-                if isinstance(level_up_channel, discord.TextChannel):
-                    LOGGER.info(
-                        "Level-up channel found: %s (%s)",
-                        level_up_channel.name,
-                        level_up_channel.id,
-                    )
-                else:
-                    LOGGER.warning(
-                        "LEVEL_UP_CHANNEL_ID is not a text channel: %s",
-                        self.settings.level_up_channel_id,
-                    )
-            except discord.HTTPException:
-                LOGGER.exception("Could not fetch level-up channel %s", self.settings.level_up_channel_id)
-        else:
-            LOGGER.info("LEVEL_UP_CHANNEL_ID not set. Level-up messages will use the source chat channel.")
-
         if self.instagram_notifications_enabled():
             try:
                 instagram_channel = self.get_channel(self.settings.instagram_notification_channel_id) or await self.fetch_channel(
@@ -5085,10 +4433,12 @@ class DyadiaGuardianBot(commands.Bot):
             self.settings.anti_raid_account_age_minutes,
             self.settings.anti_raid_timeout_minutes,
         )
-        LOGGER.info(
-            "Leveling storage backend: %s",
-            "PostgreSQL" if self.uses_postgres else f"JSON file ({LEVEL_DATA_PATH})",
-        )
+        if self.uses_postgres:
+            LOGGER.info("Persistent storage backend: PostgreSQL")
+        else:
+            LOGGER.info(
+                "Persistent storage backend: local JSON files for auto-react, no-link, and Instagram state; modlogs stay in memory."
+            )
 
     @tasks.loop(minutes=5)
     async def cleanup_inactive_modmail(self) -> None:

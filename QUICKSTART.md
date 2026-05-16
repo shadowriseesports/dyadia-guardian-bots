@@ -17,21 +17,19 @@ Fill these values:
 - `SERVER_STATS_CHANNEL_FORMAT` if you want a custom stats channel name like `members-{total}` or `online-{online}`
 - `ALL_MEMBERS_STATS_CHANNEL_ID`, `MEMBERS_STATS_CHANNEL_ID`, `BOTS_STATS_CHANNEL_ID`, `BOOSTS_STATS_CHANNEL_ID`, and `ONLINE_MEMBERS_STATS_CHANNEL_ID` if you want five separate auto-updating stat channels
 - `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a separate text channel
-- `INVITE_LOG_CHANNEL_ID` if you want invite logs in a separate text channel
+- `INVITE_LOG_CHANNEL_ID` if you want invite create and delete logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
 - `WELCOME_CHANNEL_ID` if you want automatic welcome messages in a separate text channel
 - `INSTAGRAM_NOTIFICATION_CHANNEL_ID` if you want Instagram notifications in a separate text channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
-- `LEVEL_UP_CHANNEL_ID` if you want level-up messages in a dedicated text channel
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
+- `DATABASE_URL` if you want PostgreSQL storage for modlogs, auto-reactions, no-link channels, and Instagram notifier state
 - `WELCOME_BANNER_URL` if you want a custom banner image on the welcome embed
 - `INSTAGRAM_FEED_URL` for the Instagram RSS or Atom feed you want to monitor
 - `INSTAGRAM_PROFILE_NAME` if you want a custom label on Instagram notification embeds
 - `INSTAGRAM_POLL_MINUTES` to control how often the bot checks the feed
-- `DATABASE_URL` if you want PostgreSQL-backed leveling and invite tracking on Railway
-- `LEVEL_XP_INCREMENT` to control how much extra XP each next level requires
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -78,16 +76,14 @@ You should see logs confirming:
 - modmail forum channel found
 - mod log channel found
 - server log channel found or mod-log fallback selected
-- invite log channel found or server/mod-log fallback selected
-- verification log channel found or server/mod-log fallback selected
+- invite log channel found or server or mod-log fallback selected
+- verification log channel found or server or mod-log fallback selected
 - welcome channel found or welcome messages disabled
 - staff application channel found
-- level-up channel found or source-channel fallback selected
 - Instagram notification channel found or Instagram notifier disabled
 - verified role found or `Verified` role-name fallback selected
+- persistent storage backend selected
 - anti-raid config values loaded
-- leveling data file loaded or created
-- leveling storage backend selected
 
 ## 7. Test modmail
 
@@ -104,35 +100,22 @@ You should see logs confirming:
 3. Join with a fresh test account and confirm it gets timed out
 4. Use `/antiraid deactivate` to end raid mode
 
-## 9. Test leveling
-
-1. Create the rank roles in Discord using the exact names shown by `/levelpanel`
-2. Use `/levelpanel` to post the progression panel in your server
-3. Chat with a member account in the server for a few minutes
-4. Use `/rank` to confirm XP and level progress
-5. Use `/leaderboard` to confirm the server ranking updates
-6. Use `/invites` and `/inviteleaderboard` after a tracked invite join
-
-## 10. Test verification
+## 9. Test verification
 
 1. Create a `Verified` role in Discord, or set `VERIFIED_ROLE_ID` to the role you want to assign
 2. Use `/verificationpanel` to post the HOK Dyadia verification panel
 3. Click the `HOK Dyadia Verification` button with a test member
 4. Confirm the member receives the verified role
-7. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
+5. Confirm a verification log message appears in `VERIFICATION_LOG_CHANNEL_ID`, or the server-log fallback channel
 
-## 11. Test staff applications
+## 10. Test staff applications
 
 1. Use `/staffapplypanel post` to post the staff application button panel
 2. Choose either Community Moderator or Support Moderator
 3. Complete the 2-page application form
 4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
-## 11. Railway note
-
-If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling and invite tracking data will be stored in PostgreSQL automatically. Without `DATABASE_URL`, the bot falls back to `level_data.json` and `invite_data.json` for local use.
-
-## 12. Test Instagram notifications
+## 11. Test Instagram notifications
 
 1. Set `INSTAGRAM_NOTIFICATION_CHANNEL_ID` to the text channel where you want updates
 2. Set `INSTAGRAM_FEED_URL` to an RSS or Atom feed for the Instagram account you want to monitor
@@ -141,3 +124,7 @@ If you add a Railway PostgreSQL service and expose `DATABASE_URL`, leveling and 
 5. Use `/instagramstatus` to confirm the feed URL, target channel, and poll interval
 6. Use `/instagramcheck` to run a manual poll
 7. Post a new Instagram reel or post, then wait for the next poll cycle and confirm the bot sends it to your configured channel
+
+## 12. PostgreSQL note
+
+If `DATABASE_URL` is set, the bot stores moderation logs, auto-reaction rules, no-link channel rules, and Instagram notifier state in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.

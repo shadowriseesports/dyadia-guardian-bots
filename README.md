@@ -1,23 +1,21 @@
 # Dyadia Guardian Bot
 
-Clean Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, chat-based leveling, and Instagram feed notifications.
+Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, auto-reactions, no-link channels, QOTD posting, and Instagram feed notifications.
 
-## Kept Features
+## Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `invites`, `inviteleaderboard`, `staffapplypanel` (with `post` and `disable`), `qotd`, `autoreact ...`, `nolink ...`, and `antiraid ...`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, `antiraid ...`, `instagramstatus`, and `instagramcheck`
 - DM-based modmail with an `Open Modmail` button
 - Persistent HOK Dyadia verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
-- Modmail inactivity cleanup
-- Moderation log history, stored in PostgreSQL when `DATABASE_URL` is configured
-- Server activity logs for message deletes/edits, image deletes, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins/leaves/moves, and ban/unban events
-- Staff application panel with 2-page modal workflow
-- QOTD posting command that pings the `❓QOTD` role and opens a public reply thread automatically
+- Moderation log history for `/modlogs`, stored in PostgreSQL when `DATABASE_URL` is configured
+- Server activity logs for message deletes and edits, bulk deletes, invites, moderator commands, member updates, role changes, channel changes, emoji changes, voice joins, leaves and moves, and ban or unban events
+- Staff application panel with a 2-page modal workflow
+- QOTD posting that pings the QOTD role and opens a public reply thread automatically
 - No-link channel protection with per-channel activate and deactivate commands
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
-- Persistent leveling and invite tracking data with `/rank`, `/leaderboard`, `/levelpanel`, `/invites`, and `/inviteleaderboard`
-- Automatic rank-role rewards based on your Honor of Kings leveling ladder
-- Instagram post/reel notifications from a configured RSS or Atom feed to a Discord text channel
+- PostgreSQL-backed persistence for modlogs, auto-reactions, no-link channels, and Instagram notifier state when `DATABASE_URL` is configured
+- Instagram post or reel notifications from a configured RSS or Atom feed
 
 ## Project Structure
 
@@ -56,25 +54,19 @@ Enable these intents for the bot:
 
 ## Notes
 
-- `modlogs` are stored in PostgreSQL when `DATABASE_URL` is set. Without PostgreSQL, `modlogs` remain in-memory and reset when the bot restarts.
 - `MODMAIL_FORUM_ID` must point to a forum channel.
 - Anti-raid settings can be adjusted through `.env` without editing code.
 - Use `/antiraid status` to check whether raid mode is active.
 - Set `SERVER_LOG_CHANNEL_ID` if you want server activity logs in a dedicated text channel. If it is not set, the bot falls back to `MOD_LOG_CHANNEL_ID`.
 - Set `SERVER_STATS_CHANNEL_ID` if you want the bot to rename a dedicated channel with live stats. Use `SERVER_STATS_CHANNEL_FORMAT` to control the name template, with placeholders `{guild}`, `{online}`, `{total}`, and `{boosters}`.
 - Set `ALL_MEMBERS_STATS_CHANNEL_ID`, `MEMBERS_STATS_CHANNEL_ID`, `BOTS_STATS_CHANNEL_ID`, `BOOSTS_STATS_CHANNEL_ID`, and `ONLINE_MEMBERS_STATS_CHANNEL_ID` if you want the bot to rename separate stat channels like `all-members-823`, `members-800`, `bots-23`, `boosts-4`, and `online-members-107`.
-- Set `INVITE_LOG_CHANNEL_ID` if you want invite create/delete and invite-used join logs in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
+- Set `INVITE_LOG_CHANNEL_ID` if you want invite create and delete events in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
-- Set `INSTAGRAM_NOTIFICATION_CHANNEL_ID`, `INSTAGRAM_FEED_URL`, and optionally `INSTAGRAM_PROFILE_NAME` / `INSTAGRAM_POLL_MINUTES` if you want Instagram post or reel notifications in a dedicated text channel.
-- Set `LEVEL_UP_CHANNEL_ID` if you want level-up announcements to go to one dedicated text channel.
+- Set `INSTAGRAM_NOTIFICATION_CHANNEL_ID`, `INSTAGRAM_FEED_URL`, and optionally `INSTAGRAM_PROFILE_NAME` or `INSTAGRAM_POLL_MINUTES` if you want Instagram notifications in a dedicated text channel.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
+- Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, no-link channels, and Instagram notifier state.
 - Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
-- Set `LEVEL_XP_INCREMENT` to control how much more XP each next level requires. Level 1 requires this amount, Level 2 requires double, and so on.
-- If `DATABASE_URL` is set, leveling, invite tracking, auto-reaction rules, and moderation logs are stored in PostgreSQL automatically.
-- If `DATABASE_URL` is not set, leveling falls back to `level_data.json`, invite tracking falls back to `invite_data.json`, auto-reaction rules fall back to `autoreact_data.json`, and moderation logs remain in-memory for local use.
-- No-link channel rules are stored in `no_link_channels.json` for local use.
-- Instagram notifications use `instagram_state.json` to remember already-sent feed items and avoid reposting them after restarts.
-- Invite tracking requires the bot to have `Manage Server` permission so it can read server invites.
-- Reward roles are matched by role name, so create the reward roles in Discord using the exact names from the leveling panel.
+- Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, no-link channel rules are stored in `no_link_channels.json`, Instagram notifier state is stored in `instagram_state.json`, and moderation logs stay in memory until restart.
+- With `DATABASE_URL`, the bot seeds PostgreSQL from those local JSON files when the database tables are empty.
 - Instagram does not provide a simple public feed by itself, so `INSTAGRAM_FEED_URL` should point to an RSS or Atom feed for the Instagram account you want to watch.
