@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import logging
 import re
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Deque, Dict, List, Optional
-from urllib import error as urllib_error
-from urllib import request as urllib_request
-from xml.etree import ElementTree as ET
 
 import discord
 import psycopg
@@ -47,21 +42,11 @@ BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
-INSTAGRAM_STATE_PATH = Path("instagram_state.json")
-INSTAGRAM_STATE_LIMIT = 200
-INSTAGRAM_REQUEST_TIMEOUT_SECONDS = 20
-INSTAGRAM_ERROR_LOG_COOLDOWN_SECONDS = 3600
-INSTAGRAM_HTTP_ERROR_BACKOFF_SECONDS = 21600
 SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
 CHANNEL_SEND_THROTTLE_SECONDS = 1.1
 DISCORD_RATE_LIMIT_STATUS = 429
 DISCORD_UNKNOWN_INTERACTION_CODE = 10062
 DISCORD_INTERACTION_ACKNOWLEDGED_CODE = 40060
-XML_NAMESPACES = {
-    "atom": "http://www.w3.org/2005/Atom",
-    "content": "http://purl.org/rss/1.0/modules/content/",
-    "media": "http://search.yahoo.com/mrss/",
-}
 URL_RE = re.compile(
     r"(?i)\b(?:https?://|www\.|discord\.gg/|discord(?:app)?\.com/invite/)\S+"
 )
@@ -113,17 +98,6 @@ class AntiRaidState:
 @dataclass
 class AutoReactionConfig:
     emojis: List[str] = field(default_factory=list)
-
-
-@dataclass
-class InstagramFeedEntry:
-    entry_id: str
-    title: str
-    link: str
-    description: Optional[str] = None
-    image_url: Optional[str] = None
-    published_at: Optional[datetime] = None
-    is_reel: bool = False
 
 
 def utc_now() -> datetime:
@@ -217,12 +191,6 @@ def parse_embed_color(value: str) -> Optional[discord.Color]:
 
 def is_valid_image_url(value: str) -> bool:
     return bool(re.fullmatch(r"https?://\S+", value.strip(), re.IGNORECASE))
-
-
-def strip_html(value: str) -> str:
-    without_tags = re.sub(r"<[^>]+>", " ", value)
-    collapsed = re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
-    return collapsed
 
 
 TOKEN_REFERENCE_RE = re.compile(r"\{([#@&])([^{}]+)\}")
@@ -574,14 +542,6 @@ class DyadiaGuardianBot(commands.Bot):
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
         self.no_link_channels: Dict[int, set[int]] = {}
-        self.instagram_seen_ids: set[str] = set()
-        self.instagram_seen_order: List[str] = []
-        self.instagram_last_checked_at: Optional[datetime] = None
-        self.instagram_last_success_at: Optional[datetime] = None
-        self.instagram_last_error: Optional[str] = None
-        self.instagram_next_retry_at: Optional[datetime] = None
-        self.instagram_last_error_log_key: Optional[str] = None
-        self.instagram_last_error_logged_at: Optional[datetime] = None
         self.server_stats_logged_once = False
         self.server_stats_running = False
         self.stats_channel_last_rename_at: Dict[int, datetime] = {}
@@ -600,7 +560,6 @@ class DyadiaGuardianBot(commands.Bot):
             await asyncio.to_thread(self.ensure_postgres_schema)
         await self.load_autoreact_data()
         await self.load_no_link_data()
-        await self.load_instagram_state()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -608,9 +567,6 @@ class DyadiaGuardianBot(commands.Bot):
         self.add_view(self.staff_application_view)
         self.cleanup_inactive_modmail.start()
         self.server_stats_loop.start()
-        self.instagram_feed_loop.change_interval(minutes=self.settings.instagram_poll_minutes)
-        if self.instagram_notifications_enabled():
-            self.instagram_feed_loop.start()
 
     def ensure_postgres_schema(self) -> None:
         try:
@@ -652,14 +608,6 @@ class DyadiaGuardianBot(commands.Bot):
                             guild_id BIGINT NOT NULL,
                             channel_id BIGINT NOT NULL,
                             PRIMARY KEY (guild_id, channel_id)
-                        )
-                        """
-                    )
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS instagram_state (
-                            state_key TEXT PRIMARY KEY,
-                            seen_ids TEXT[] NOT NULL DEFAULT '{}'
                         )
                         """
                     )
@@ -818,22 +766,6 @@ class DyadiaGuardianBot(commands.Bot):
             else:
                 LOGGER.exception("%s failed for channel %s", label, channel_id)
             return None
-
-    def log_instagram_poll_failure(self, key: str, message: str, *, with_traceback: bool = False) -> None:
-        now = utc_now()
-        if (
-            self.instagram_last_error_log_key == key
-            and self.instagram_last_error_logged_at is not None
-            and (now - self.instagram_last_error_logged_at).total_seconds() < INSTAGRAM_ERROR_LOG_COOLDOWN_SECONDS
-        ):
-            return
-
-        self.instagram_last_error_log_key = key
-        self.instagram_last_error_logged_at = now
-        if with_traceback:
-            LOGGER.exception(message)
-        else:
-            LOGGER.warning(message)
 
     async def on_message(self, message: discord.Message) -> None:
         if isinstance(message.channel, discord.DMChannel):
@@ -1049,14 +981,6 @@ class DyadiaGuardianBot(commands.Bot):
                 ),
                 inline=False,
             )
-            embed.add_field(
-                name="Instagram",
-                value=(
-                    "`/instagramstatus` show Instagram notifier settings and health\n"
-                    "`/instagramcheck` poll the configured Instagram feed right now"
-                ),
-                inline=False,
-            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         @tree.command(name="warn", description="Warn a member")
@@ -1180,14 +1104,6 @@ class DyadiaGuardianBot(commands.Bot):
             auto_archive_hours: app_commands.Range[int, 1, 168] = 24,
         ) -> None:
             await self.handle_qotd(interaction, question, channel, auto_archive_hours)
-
-        @tree.command(name="instagramstatus", description="Show Instagram notification settings and status")
-        async def instagramstatus(interaction: discord.Interaction) -> None:
-            await self.handle_instagram_status(interaction)
-
-        @tree.command(name="instagramcheck", description="Check the configured Instagram feed now")
-        async def instagramcheck(interaction: discord.Interaction) -> None:
-            await self.handle_instagram_check(interaction)
 
         autoreact = app_commands.Group(name="autoreact", description="Manage automatic message reactions")
 
@@ -2905,371 +2821,6 @@ class DyadiaGuardianBot(commands.Bot):
         valid_durations = (60, 1440, 4320, 10080)
         return min(valid_durations, key=lambda duration: (abs(duration - requested_minutes), duration))
 
-    def instagram_notifications_enabled(self) -> bool:
-        return bool(self.settings.instagram_feed_url and self.settings.instagram_notification_channel_id)
-
-    async def load_instagram_state(self) -> None:
-        seen_order = await asyncio.to_thread(self._load_instagram_state_sync)
-        self.instagram_seen_order = seen_order[-INSTAGRAM_STATE_LIMIT:]
-        self.instagram_seen_ids = set(self.instagram_seen_order)
-
-    def _load_instagram_state_sync(self) -> List[str]:
-        if self.uses_postgres:
-            seen_order = self._load_instagram_state_from_postgres()
-            if seen_order:
-                return seen_order
-
-            fallback_seen_order = self._load_instagram_state_from_json()
-            if fallback_seen_order:
-                self._save_instagram_state_to_postgres(fallback_seen_order)
-                LOGGER.info("Seeded PostgreSQL Instagram state from %s", INSTAGRAM_STATE_PATH)
-            return fallback_seen_order
-
-        return self._load_instagram_state_from_json()
-
-    def _load_instagram_state_from_json(self) -> List[str]:
-        try:
-            raw = json.loads(INSTAGRAM_STATE_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return []
-
-        if not isinstance(raw, dict):
-            return []
-
-        seen_items = raw.get("seen_ids", [])
-        if not isinstance(seen_items, list):
-            return []
-
-        normalized: List[str] = []
-        for item in seen_items:
-            if isinstance(item, str) and item and item not in normalized:
-                normalized.append(item)
-        return normalized
-
-    def save_instagram_state(self) -> None:
-        if self.uses_postgres:
-            self._save_instagram_state_to_postgres(self.instagram_seen_order)
-            return
-        self._save_instagram_state_to_json(self.instagram_seen_order)
-
-    def _load_instagram_state_from_postgres(self) -> List[str]:
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT seen_ids
-                        FROM instagram_state
-                        WHERE state_key = %s
-                        """,
-                        ("default",),
-                    )
-                    row = cur.fetchone()
-        except Exception:
-            LOGGER.exception("Failed to load Instagram notification state from PostgreSQL.")
-            return []
-
-        if row is None:
-            return []
-
-        raw_seen_ids = row[0]
-        normalized: List[str] = []
-        for item in raw_seen_ids if isinstance(raw_seen_ids, list) else []:
-            if isinstance(item, str) and item and item not in normalized:
-                normalized.append(item)
-        LOGGER.info("Loaded Instagram notification state from PostgreSQL with %s seen item(s).", len(normalized))
-        return normalized
-
-    def _save_instagram_state_to_json(self, seen_order: List[str]) -> None:
-        payload = {"seen_ids": seen_order[-INSTAGRAM_STATE_LIMIT:]}
-        try:
-            INSTAGRAM_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except OSError:
-            LOGGER.exception("Failed to save Instagram notification state.")
-
-    def _save_instagram_state_to_postgres(self, seen_order: List[str]) -> None:
-        normalized = seen_order[-INSTAGRAM_STATE_LIMIT:]
-        try:
-            with psycopg.connect(self.settings.database_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO instagram_state (state_key, seen_ids)
-                        VALUES (%s, %s)
-                        ON CONFLICT (state_key) DO UPDATE
-                        SET seen_ids = EXCLUDED.seen_ids
-                        """,
-                        ("default", normalized),
-                    )
-                conn.commit()
-        except Exception:
-            LOGGER.exception("Failed to save Instagram notification state to PostgreSQL.")
-
-    async def persist_instagram_state(self) -> None:
-        await asyncio.to_thread(self.save_instagram_state)
-
-    def remember_instagram_entry(self, entry_id: str) -> None:
-        if entry_id in self.instagram_seen_ids:
-            return
-        self.instagram_seen_order.append(entry_id)
-        self.instagram_seen_ids.add(entry_id)
-        if len(self.instagram_seen_order) > INSTAGRAM_STATE_LIMIT:
-            overflow = self.instagram_seen_order[:-INSTAGRAM_STATE_LIMIT]
-            self.instagram_seen_order = self.instagram_seen_order[-INSTAGRAM_STATE_LIMIT:]
-            for stale_id in overflow:
-                if stale_id not in self.instagram_seen_order:
-                    self.instagram_seen_ids.discard(stale_id)
-
-    def parse_instagram_timestamp(self, value: Optional[str]) -> Optional[datetime]:
-        if not value:
-            return None
-
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = parsedate_to_datetime(value)
-            except (TypeError, ValueError, IndexError):
-                return None
-
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    def get_xml_child_text(self, element: ET.Element, *paths: str) -> Optional[str]:
-        for path in paths:
-            found = element.find(path, XML_NAMESPACES)
-            if found is not None and found.text:
-                cleaned = found.text.strip()
-                if cleaned:
-                    return cleaned
-        return None
-
-    def get_xml_attribute(self, element: ET.Element, path: str, attribute: str) -> Optional[str]:
-        found = element.find(path, XML_NAMESPACES)
-        if found is None:
-            return None
-        value = found.attrib.get(attribute, "").strip()
-        return value or None
-
-    def parse_instagram_feed(self, raw_xml: str) -> List[InstagramFeedEntry]:
-        root = ET.fromstring(raw_xml)
-        entries: List[InstagramFeedEntry] = []
-        item_elements = root.findall("./channel/item")
-        if not item_elements:
-            item_elements = root.findall("./atom:entry", XML_NAMESPACES)
-
-        for element in item_elements:
-            title = self.get_xml_child_text(element, "title") or "New Instagram post"
-            link = self.get_xml_child_text(element, "link") or self.get_xml_attribute(element, "atom:link", "href")
-            if not link:
-                continue
-
-            entry_id = (
-                self.get_xml_child_text(element, "guid", "atom:id")
-                or link
-                or title
-            )
-            description = self.get_xml_child_text(element, "description", "content:encoded", "summary")
-            image_url = (
-                self.get_xml_attribute(element, "media:content", "url")
-                or self.get_xml_attribute(element, "media:thumbnail", "url")
-                or self.get_xml_attribute(element, "enclosure", "url")
-            )
-            published_at = self.parse_instagram_timestamp(
-                self.get_xml_child_text(element, "pubDate", "published", "updated", "atom:updated")
-            )
-            lowered_title = title.lower()
-            lowered_link = link.lower()
-            entries.append(
-                InstagramFeedEntry(
-                    entry_id=entry_id,
-                    title=html.unescape(title),
-                    link=link,
-                    description=strip_html(description) if description else None,
-                    image_url=image_url,
-                    published_at=published_at,
-                    is_reel="reel" in lowered_title or "/reel/" in lowered_link or " reels " in lowered_title,
-                )
-            )
-
-        entries.sort(key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc))
-        return entries
-
-    def fetch_instagram_feed_sync(self) -> List[InstagramFeedEntry]:
-        request = urllib_request.Request(
-            self.settings.instagram_feed_url,
-            headers={
-                "User-Agent": "DyadiaGuardianBot/1.0 (+Discord Instagram notifier)",
-                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-            },
-        )
-        with urllib_request.urlopen(request, timeout=INSTAGRAM_REQUEST_TIMEOUT_SECONDS) as response:
-            payload = response.read().decode("utf-8", errors="replace")
-        return self.parse_instagram_feed(payload)
-
-    async def fetch_instagram_feed(self) -> List[InstagramFeedEntry]:
-        return await asyncio.to_thread(self.fetch_instagram_feed_sync)
-
-    async def get_instagram_notification_channel(self) -> Optional[discord.TextChannel]:
-        channel_id = self.settings.instagram_notification_channel_id
-        if not channel_id:
-            return None
-
-        channel = self.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await self.fetch_channel(channel_id)
-            except discord.HTTPException:
-                LOGGER.exception("Could not fetch Instagram notification channel %s", channel_id)
-                return None
-
-        if isinstance(channel, discord.TextChannel):
-            return channel
-
-        LOGGER.warning("INSTAGRAM_NOTIFICATION_CHANNEL_ID is not a text channel: %s", channel_id)
-        return None
-
-    def create_instagram_notification_embed(self, entry: InstagramFeedEntry) -> discord.Embed:
-        label = "New Instagram Reel" if entry.is_reel else "New Instagram Post"
-        description_parts = [f"[Open on Instagram]({entry.link})"]
-        if entry.description:
-            description_parts.append(truncate_text(entry.description, 600))
-
-        embed = make_embed(
-            label,
-            "\n\n".join(description_parts),
-            discord.Color.magenta(),
-            footer=f"{BRAND_FOOTER} | {self.settings.instagram_profile_name}",
-        )
-        embed.title = truncate_text(entry.title, 256)
-        embed.url = entry.link
-        if entry.published_at is not None:
-            embed.timestamp = entry.published_at
-        if entry.image_url:
-            embed.set_image(url=entry.image_url)
-        return embed
-
-    def create_instagram_status_embed(self, channel: Optional[discord.TextChannel]) -> discord.Embed:
-        enabled = self.instagram_notifications_enabled()
-        lines = [
-            f"Status: **{'Enabled' if enabled else 'Disabled'}**",
-            f"Profile label: **{self.settings.instagram_profile_name}**",
-            f"Poll interval: **{self.settings.instagram_poll_minutes} minute(s)**",
-            f"Target channel: {channel.mention if channel is not None else 'Not available'}",
-            f"Tracked sent items: **{len(self.instagram_seen_order)}**",
-            f"Last check: **{self.instagram_last_checked_at.isoformat() if self.instagram_last_checked_at else 'Never'}**",
-            f"Last successful check: **{self.instagram_last_success_at.isoformat() if self.instagram_last_success_at else 'Never'}**",
-            f"Next automatic retry: **{self.instagram_next_retry_at.isoformat() if self.instagram_next_retry_at else 'Normal schedule'}**",
-            f"Last check error: **{self.instagram_last_error or 'None'}**",
-        ]
-        if self.settings.instagram_feed_url:
-            lines.insert(1, f"Feed URL: {self.settings.instagram_feed_url}")
-        else:
-            lines.insert(1, "Feed URL: Not configured")
-        return make_embed("Instagram Notifications", "\n".join(lines), discord.Color.blurple())
-
-    async def poll_instagram_feed_once(self, *, force: bool = False) -> int:
-        if not self.instagram_notifications_enabled():
-            self.instagram_last_checked_at = utc_now()
-            self.instagram_last_error = "Instagram feed URL or notification channel is not configured."
-            self.instagram_next_retry_at = None
-            return 0
-
-        channel = await self.get_instagram_notification_channel()
-        if channel is None:
-            self.instagram_last_checked_at = utc_now()
-            self.instagram_last_error = "Configured Instagram notification channel could not be resolved."
-            return 0
-
-        now = utc_now()
-        if not force and self.instagram_next_retry_at is not None and now < self.instagram_next_retry_at:
-            self.instagram_last_checked_at = now
-            LOGGER.info("Skipping Instagram feed poll until %s because the feed is in HTTP error backoff.", self.instagram_next_retry_at)
-            return 0
-
-        try:
-            entries = await self.fetch_instagram_feed()
-        except urllib_error.HTTPError as exc:
-            self.instagram_last_checked_at = utc_now()
-            reason = exc.reason or "HTTP error"
-            self.instagram_last_error = f"Feed provider returned HTTP {exc.code} {reason}."
-            if exc.code in {401, 402, 403, 404}:
-                self.instagram_next_retry_at = self.instagram_last_checked_at + timedelta(seconds=INSTAGRAM_HTTP_ERROR_BACKOFF_SECONDS)
-            else:
-                self.instagram_next_retry_at = None
-            if exc.code == 402:
-                self.log_instagram_poll_failure(
-                    f"http:{exc.code}",
-                    "Instagram feed provider returned HTTP 402 Payment Required. Check the RSS.app feed plan or replace INSTAGRAM_FEED_URL.",
-                )
-            else:
-                self.log_instagram_poll_failure(
-                    f"http:{exc.code}",
-                    f"Instagram feed fetch failed with HTTP {exc.code} {reason}.",
-                )
-            return 0
-        except ET.ParseError:
-            self.instagram_last_checked_at = utc_now()
-            self.instagram_last_error = "Feed XML could not be parsed."
-            self.instagram_next_retry_at = None
-            self.log_instagram_poll_failure("parse", "Instagram feed XML could not be parsed.", with_traceback=True)
-            return 0
-        except urllib_error.URLError as exc:
-            self.instagram_last_checked_at = utc_now()
-            self.instagram_last_error = str(exc.reason) if getattr(exc, "reason", None) else str(exc)
-            self.instagram_next_retry_at = None
-            self.log_instagram_poll_failure(
-                f"url:{self.instagram_last_error}",
-                f"Instagram feed fetch failed: {self.instagram_last_error}",
-                with_traceback=True,
-            )
-            return 0
-        except Exception:
-            self.instagram_last_checked_at = utc_now()
-            self.instagram_last_error = "Unexpected feed polling error."
-            self.instagram_next_retry_at = None
-            self.log_instagram_poll_failure("unexpected", "Unexpected Instagram feed polling error.", with_traceback=True)
-            return 0
-
-        self.instagram_last_checked_at = utc_now()
-        self.instagram_last_success_at = self.instagram_last_checked_at
-        self.instagram_last_error = None
-        self.instagram_next_retry_at = None
-        self.instagram_last_error_log_key = None
-        self.instagram_last_error_logged_at = None
-
-        if not entries:
-            return 0
-
-        if not self.instagram_seen_order:
-            for entry in entries:
-                self.remember_instagram_entry(entry.entry_id)
-            await self.persist_instagram_state()
-            LOGGER.info("Instagram notifier seeded with %s existing feed item(s).", len(entries))
-            return 0
-
-        new_entries = [entry for entry in entries if entry.entry_id not in self.instagram_seen_ids]
-        sent_count = 0
-        for entry in new_entries:
-            message = await self.safe_send_embed(
-                channel,
-                self.create_instagram_notification_embed(entry),
-                f"Instagram notification for {entry.link}",
-            )
-            if message is None:
-                self.instagram_last_error = f"Failed to send message for {entry.link}"
-                continue
-
-            self.remember_instagram_entry(entry.entry_id)
-            sent_count += 1
-
-        if sent_count:
-            await self.persist_instagram_state()
-            LOGGER.info("Sent %s Instagram notification(s) to %s", sent_count, channel.id)
-
-        return sent_count
-
     async def handle_warn(self, interaction: discord.Interaction, user: discord.Member, reason: str) -> None:
         if not await self.ensure_staff(interaction, "moderate_members"):
             return
@@ -3819,28 +3370,6 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         await interaction.response.send_modal(EmbedBuilderModal(self, target_channel))
-
-    async def handle_instagram_status(self, interaction: discord.Interaction) -> None:
-        if not await self.ensure_staff(interaction, "manage_guild"):
-            return
-
-        channel = await self.get_instagram_notification_channel()
-        await interaction.response.send_message(embed=self.create_instagram_status_embed(channel), ephemeral=True)
-
-    async def handle_instagram_check(self, interaction: discord.Interaction) -> None:
-        if not await self.ensure_staff(interaction, "manage_guild"):
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        sent_count = await self.poll_instagram_feed_once(force=True)
-        channel = await self.get_instagram_notification_channel()
-        embed = self.create_instagram_status_embed(channel)
-        embed.add_field(
-            name="Manual Check Result",
-            value=f"Sent **{sent_count}** new notification(s).",
-            inline=False,
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     def get_anti_raid_state(self, guild_id: int) -> AntiRaidState:
         state = self.anti_raid_states.get(guild_id)
@@ -4661,37 +4190,6 @@ class DyadiaGuardianBot(commands.Bot):
                 self.settings.staff_application_channel_id,
             )
 
-        if self.instagram_notifications_enabled():
-            try:
-                instagram_channel = self.get_channel(self.settings.instagram_notification_channel_id) or await self.fetch_channel(
-                    self.settings.instagram_notification_channel_id
-                )
-                if isinstance(instagram_channel, discord.TextChannel):
-                    LOGGER.info(
-                        "Instagram notification channel found: %s (%s)",
-                        instagram_channel.name,
-                        instagram_channel.id,
-                    )
-                else:
-                    LOGGER.warning(
-                        "INSTAGRAM_NOTIFICATION_CHANNEL_ID is not a text channel: %s",
-                        self.settings.instagram_notification_channel_id,
-                    )
-            except discord.HTTPException:
-                LOGGER.exception(
-                    "Could not fetch Instagram notification channel %s",
-                    self.settings.instagram_notification_channel_id,
-                )
-
-            LOGGER.info(
-                "Instagram notifier enabled | poll=%sm profile=%s feed=%s",
-                self.settings.instagram_poll_minutes,
-                self.settings.instagram_profile_name,
-                self.settings.instagram_feed_url,
-            )
-        else:
-            LOGGER.info("Instagram notifier disabled. Set INSTAGRAM_FEED_URL and INSTAGRAM_NOTIFICATION_CHANNEL_ID to enable it.")
-
         if self.settings.verified_role_id:
             for guild in self.guilds:
                 role = guild.get_role(self.settings.verified_role_id)
@@ -4716,7 +4214,7 @@ class DyadiaGuardianBot(commands.Bot):
             LOGGER.info("Persistent storage backend: PostgreSQL")
         else:
             LOGGER.info(
-                "Persistent storage backend: local JSON files for auto-react, no-link, and Instagram state; modlogs stay in memory."
+                "Persistent storage backend: local JSON files for auto-react and no-link data; modlogs stay in memory."
             )
 
     @tasks.loop(minutes=5)
@@ -4739,15 +4237,6 @@ class DyadiaGuardianBot(commands.Bot):
     @server_stats_loop.before_loop
     async def before_server_stats_loop(self) -> None:
         await self.wait_until_ready()
-
-    @tasks.loop(minutes=10)
-    async def instagram_feed_loop(self) -> None:
-        await self.poll_instagram_feed_once()
-
-    @instagram_feed_loop.before_loop
-    async def before_instagram_feed_loop(self) -> None:
-        await self.wait_until_ready()
-
 
 def main() -> None:
     settings = load_settings()

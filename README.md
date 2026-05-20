@@ -1,10 +1,10 @@
 # Dyadia Guardian Bot
 
-Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, auto-reactions, no-link channels, QOTD posting, and Instagram feed notifications.
+Python Discord bot for moderation, verification, modmail, staff applications, anti-raid protection, server activity logs, auto-reactions, no-link channels, and QOTD posting.
 
 ## Features
 
-- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, `antiraid ...`, `instagramstatus`, and `instagramcheck`
+- Slash commands: `help`, `warn`, `mute`, `kick`, `ban`, `unban`, `addrole`, `removerole`, `clear`, `modlogs`, `verificationpanel`, `staffapplypanel` (`post` and `disable`), `qotd`, `embed`, `autoreact ...`, `nolink ...`, and `antiraid ...`
 - DM-based modmail with an `Open Modmail` button
 - Persistent HOK Dyadia verification panel that assigns the `Verified` role
 - Forum-thread modmail relay between moderators and users
@@ -14,8 +14,7 @@ Python Discord bot for moderation, verification, modmail, staff applications, an
 - QOTD posting that pings the QOTD role and opens a public reply thread automatically
 - No-link channel protection with per-channel activate and deactivate commands
 - Anti-raid detection for join bursts with temporary raid mode and auto-timeout for suspicious fresh accounts
-- PostgreSQL-backed persistence for modlogs, auto-reactions, no-link channels, and Instagram notifier state when `DATABASE_URL` is configured
-- Instagram post or reel notifications from a configured RSS or Atom feed
+- PostgreSQL-backed persistence for modlogs, auto-reactions, and no-link channels when `DATABASE_URL` is configured
 
 ## Project Structure
 
@@ -63,10 +62,8 @@ Enable these intents for the bot:
 - Set `INVITE_LOG_CHANNEL_ID` if you want invite create and delete events in a dedicated text channel. If it is not set, invite logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a dedicated text channel. If it is not set, verification logs fall back to `SERVER_LOG_CHANNEL_ID`, then `MOD_LOG_CHANNEL_ID`.
 - Set `WELCOME_CHANNEL_ID` if you want automatic welcome messages for new members in a dedicated text channel.
-- Set `INSTAGRAM_NOTIFICATION_CHANNEL_ID`, `INSTAGRAM_FEED_URL`, and optionally `INSTAGRAM_PROFILE_NAME` or `INSTAGRAM_POLL_MINUTES` if you want Instagram notifications in a dedicated text channel.
 - Set `VERIFIED_ROLE_ID` if you want the verification button to target a specific role ID. If it is not set, the bot falls back to a role named `Verified`.
-- Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, no-link channels, and Instagram notifier state.
+- Set `DATABASE_URL` if you want persistent PostgreSQL storage for moderation logs, auto-reaction rules, and no-link channels.
 - Set `WELCOME_BANNER_URL` if you want a custom image banner on the welcome embed.
-- Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, no-link channel rules are stored in `no_link_channels.json`, Instagram notifier state is stored in `instagram_state.json`, and moderation logs stay in memory until restart.
+- Without `DATABASE_URL`, auto-reaction rules are stored in `autoreact_data.json`, no-link channel rules are stored in `no_link_channels.json`, and moderation logs stay in memory until restart.
 - With `DATABASE_URL`, the bot seeds PostgreSQL from those local JSON files when the database tables are empty.
-- Instagram does not provide a simple public feed by itself, so `INSTAGRAM_FEED_URL` should point to an RSS or Atom feed for the Instagram account you want to watch.

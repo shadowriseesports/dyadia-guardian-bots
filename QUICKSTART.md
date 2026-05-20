@@ -20,16 +20,12 @@ Fill these values:
 - `INVITE_LOG_CHANNEL_ID` if you want invite create and delete logs in a separate text channel
 - `VERIFICATION_LOG_CHANNEL_ID` if you want successful verification logs in a separate text channel
 - `WELCOME_CHANNEL_ID` if you want automatic welcome messages in a separate text channel
-- `INSTAGRAM_NOTIFICATION_CHANNEL_ID` if you want Instagram notifications in a separate text channel
 - `STAFF_APPLICATION_CHANNEL_ID`
 - `MODERATOR_ROLE_ID`
 - `ADMIN_ROLE_ID`
 - `VERIFIED_ROLE_ID` if you want the verification button to assign a specific role ID
-- `DATABASE_URL` if you want PostgreSQL storage for modlogs, auto-reactions, no-link channels, and Instagram notifier state
+- `DATABASE_URL` if you want PostgreSQL storage for modlogs, auto-reactions, and no-link channels
 - `WELCOME_BANNER_URL` if you want a custom banner image on the welcome embed
-- `INSTAGRAM_FEED_URL` for the Instagram RSS or Atom feed you want to monitor
-- `INSTAGRAM_PROFILE_NAME` if you want a custom label on Instagram notification embeds
-- `INSTAGRAM_POLL_MINUTES` to control how often the bot checks the feed
 - Optional anti-raid tuning:
 - `ANTI_RAID_ENABLED`
 - `ANTI_RAID_JOIN_THRESHOLD`
@@ -80,7 +76,6 @@ You should see logs confirming:
 - verification log channel found or server or mod-log fallback selected
 - welcome channel found or welcome messages disabled
 - staff application channel found
-- Instagram notification channel found or Instagram notifier disabled
 - verified role found or `Verified` role-name fallback selected
 - persistent storage backend selected
 - anti-raid config values loaded
@@ -115,16 +110,6 @@ You should see logs confirming:
 3. Complete the 2-page application form
 4. Use `/staffapplypanel disable` if you need to disable the posted panel later
 
-## 11. Test Instagram notifications
+## 11. PostgreSQL note
 
-1. Set `INSTAGRAM_NOTIFICATION_CHANNEL_ID` to the text channel where you want updates
-2. Set `INSTAGRAM_FEED_URL` to an RSS or Atom feed for the Instagram account you want to monitor
-3. Optional: set `INSTAGRAM_PROFILE_NAME` and `INSTAGRAM_POLL_MINUTES`
-4. Start the bot and confirm the startup log says the Instagram notifier is enabled
-5. Use `/instagramstatus` to confirm the feed URL, target channel, and poll interval
-6. Use `/instagramcheck` to run a manual poll
-7. Post a new Instagram reel or post, then wait for the next poll cycle and confirm the bot sends it to your configured channel
-
-## 12. PostgreSQL note
-
-If `DATABASE_URL` is set, the bot stores moderation logs, auto-reaction rules, no-link channel rules, and Instagram notifier state in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.
+If `DATABASE_URL` is set, the bot stores moderation logs, auto-reaction rules, and no-link channel rules in PostgreSQL. If those database tables are empty, the bot imports existing local JSON data on startup. Without `DATABASE_URL`, the bot falls back to local JSON files and in-memory modlogs.
