@@ -1364,32 +1364,30 @@ class DyadiaGuardianBot(commands.Bot):
         return None
 
     def create_welcome_embed(self, member: discord.Member) -> discord.Embed:
-        verified_role = self.get_verified_role(member.guild)
-        verified_role_text = verified_role.mention if verified_role is not None else "@Verified"
         verify_channel = self.format_channel_reference(member.guild, "verify")
         server_info_channel = self.format_channel_reference(member.guild, "server-info")
         intro_channel = self.format_channel_reference(member.guild, "intro")
+        general_chat_channel = self.format_channel_reference(member.guild, "general-chat")
 
         embed = discord.Embed(
-            title=f"Welcome to {member.guild.name}",
             color=discord.Color.green(),
             timestamp=utc_now(),
         )
         embed.description = (
-            f"Hey {member.mention}! Glad to have you here!\n\n"
-            "**Verification Required**\n"
-            "Before accessing all channels, please complete verification.\n\n"
-            f"Go to {verify_channel} and tap the **HOK Dyadia Verification** button.\n"
-            f"After completing it, you will automatically receive the {verified_role_text} role and unlock the server.\n\n"
-            "Start here:\n"
-            f"1. Verify yourself in {verify_channel}\n"
-            f"2. Read {server_info_channel} to understand the rules\n"
-            f"3. Introduce yourself in {intro_channel}\n"
-            "4. Jump into chats and start making teammates!\n\n"
-            "Let's build the strongest Honor of Kings community in Northeast India."
+            "╔═══━━━━─━━─━───── • ───━━─━─━─━─━━═══╗\n"
+            ":crown: **HONOR OF KINGS** **NORTHEAST INDIA**\n"
+            "╚═══━━━━─━━─━───── • ───━━─━──━─━━━═══╝\n\n"
+            f"Welcome to the server, {member.mention} :crossed_swords:\n"
+            "Prepare to battle, connect, and rise with the community!\n\n"
+            "╔═══━━━─────〔START HERE〕──━─━─━━═══╗\n"
+            f"     :arrow_arrow~1: Verify yourself in {verify_channel}\n"
+            f"     :arrow_arrow~1: Read {server_info_channel} carefully\n"
+            f"     :arrow_arrow~1: Introduce yourself in {intro_channel}\n"
+            f"     :arrow_arrow~1: Join the chats in {general_chat_channel}\n"
+            "╚═══━━━━─━━─━───── • ───━━─━──━─━━━═══╝\n\n"
+            ":fire: **Play • Compete • Conquer** :fire:"
         )
         embed.set_footer(text=BRAND_FOOTER)
-        embed.set_thumbnail(url=DEFAULT_THUMBNAIL_URL)
         embed.set_image(url=self.settings.welcome_banner_url or DEFAULT_WELCOME_BANNER_URL)
         return embed
 
