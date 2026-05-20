@@ -50,6 +50,13 @@ NO_LINK_DATA_PATH = Path("no_link_channels.json")
 INSTAGRAM_STATE_PATH = Path("instagram_state.json")
 INSTAGRAM_STATE_LIMIT = 200
 INSTAGRAM_REQUEST_TIMEOUT_SECONDS = 20
+INSTAGRAM_ERROR_LOG_COOLDOWN_SECONDS = 3600
+INSTAGRAM_HTTP_ERROR_BACKOFF_SECONDS = 21600
+SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
+CHANNEL_SEND_THROTTLE_SECONDS = 1.1
+DISCORD_RATE_LIMIT_STATUS = 429
+DISCORD_UNKNOWN_INTERACTION_CODE = 10062
+DISCORD_INTERACTION_ACKNOWLEDGED_CODE = 40060
 XML_NAMESPACES = {
     "atom": "http://www.w3.org/2005/Atom",
     "content": "http://purl.org/rss/1.0/modules/content/",
@@ -572,7 +579,14 @@ class DyadiaGuardianBot(commands.Bot):
         self.instagram_last_checked_at: Optional[datetime] = None
         self.instagram_last_success_at: Optional[datetime] = None
         self.instagram_last_error: Optional[str] = None
+        self.instagram_next_retry_at: Optional[datetime] = None
+        self.instagram_last_error_log_key: Optional[str] = None
+        self.instagram_last_error_logged_at: Optional[datetime] = None
         self.server_stats_logged_once = False
+        self.server_stats_running = False
+        self.stats_channel_last_rename_at: Dict[int, datetime] = {}
+        self.channel_send_locks: Dict[int, asyncio.Lock] = {}
+        self.channel_last_send_at: Dict[int, datetime] = {}
         self.guild_members_chunked: set[int] = set()
         self.previous_server_stats: Dict[int, tuple[Optional[int], Optional[int], int]] = {}
         self.uses_postgres = bool(self.settings.database_url)
@@ -690,17 +704,136 @@ class DyadiaGuardianBot(commands.Bot):
         interaction: discord.Interaction,
         error: app_commands.AppCommandError,
     ) -> None:
-        LOGGER.exception("Application command failed", exc_info=error)
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send("An unexpected error occurred while running that command.", ephemeral=True)
-            else:
-                await interaction.response.send_message("An unexpected error occurred while running that command.", ephemeral=True)
-        except discord.HTTPException:
-            LOGGER.warning("Could not send command error response to %s", interaction.user)
+        LOGGER.error("Application command failed", exc_info=error)
+        await self.send_interaction_message(
+            interaction,
+            "An unexpected error occurred while running that command.",
+            ephemeral=True,
+        )
 
     async def on_error(self, event_method: str, /, *args, **kwargs) -> None:
         LOGGER.exception("Unhandled Discord event error in %s", event_method)
+
+    def is_discord_rate_limit(self, error: discord.HTTPException) -> bool:
+        return getattr(error, "status", None) == DISCORD_RATE_LIMIT_STATUS or "rate limited" in str(error).lower()
+
+    def is_interaction_response_error(self, error: discord.HTTPException) -> bool:
+        return getattr(error, "code", None) in {
+            DISCORD_UNKNOWN_INTERACTION_CODE,
+            DISCORD_INTERACTION_ACKNOWLEDGED_CODE,
+        }
+
+    def log_interaction_response_failure(self, interaction: discord.Interaction, error: discord.HTTPException) -> None:
+        if self.is_interaction_response_error(error) or self.is_discord_rate_limit(error):
+            LOGGER.warning(
+                "Could not respond to interaction %s for %s: %s",
+                interaction.id,
+                interaction.user,
+                error,
+            )
+            return
+        LOGGER.exception("Could not respond to interaction %s for %s", interaction.id, interaction.user)
+
+    async def send_interaction_message(
+        self,
+        interaction: discord.Interaction,
+        content: Optional[str] = None,
+        *,
+        embed: Optional[discord.Embed] = None,
+        ephemeral: bool = True,
+        **kwargs,
+    ) -> bool:
+        send_kwargs = {"ephemeral": ephemeral, **kwargs}
+        if embed is not None:
+            send_kwargs["embed"] = embed
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(content, **send_kwargs)
+            else:
+                await interaction.response.send_message(content, **send_kwargs)
+            return True
+        except discord.HTTPException as error:
+            if getattr(error, "code", None) == DISCORD_INTERACTION_ACKNOWLEDGED_CODE and not interaction.response.is_done():
+                try:
+                    await interaction.followup.send(content, **send_kwargs)
+                    return True
+                except discord.HTTPException as followup_error:
+                    error = followup_error
+            self.log_interaction_response_failure(interaction, error)
+            return False
+
+    async def defer_interaction_once(
+        self,
+        interaction: discord.Interaction,
+        *,
+        ephemeral: bool = True,
+        thinking: bool = False,
+    ) -> bool:
+        if interaction.response.is_done():
+            return True
+        try:
+            await interaction.response.defer(ephemeral=ephemeral, thinking=thinking)
+            return True
+        except discord.HTTPException as error:
+            if getattr(error, "code", None) == DISCORD_INTERACTION_ACKNOWLEDGED_CODE:
+                return True
+            self.log_interaction_response_failure(interaction, error)
+            return False
+
+    async def safe_send_embed(
+        self,
+        channel: discord.abc.Messageable,
+        embed: discord.Embed,
+        label: str,
+    ) -> Optional[discord.Message]:
+        channel_id = getattr(channel, "id", None)
+        if isinstance(channel_id, int):
+            lock = self.channel_send_locks.setdefault(channel_id, asyncio.Lock())
+            async with lock:
+                last_send_at = self.channel_last_send_at.get(channel_id)
+                if last_send_at is not None:
+                    elapsed_seconds = (utc_now() - last_send_at).total_seconds()
+                    wait_seconds = CHANNEL_SEND_THROTTLE_SECONDS - elapsed_seconds
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+                message = await self._send_embed_without_throttle(channel, embed, label)
+                self.channel_last_send_at[channel_id] = utc_now()
+                return message
+
+        return await self._send_embed_without_throttle(channel, embed, label)
+
+    async def _send_embed_without_throttle(
+        self,
+        channel: discord.abc.Messageable,
+        embed: discord.Embed,
+        label: str,
+    ) -> Optional[discord.Message]:
+        try:
+            return await channel.send(embed=embed)
+        except discord.HTTPException as error:
+            channel_id = getattr(channel, "id", "unknown")
+            if self.is_discord_rate_limit(error):
+                LOGGER.warning("%s skipped because Discord rate-limited channel %s: %s", label, channel_id, error)
+            else:
+                LOGGER.exception("%s failed for channel %s", label, channel_id)
+            return None
+
+    def log_instagram_poll_failure(self, key: str, message: str, *, with_traceback: bool = False) -> None:
+        now = utc_now()
+        if (
+            self.instagram_last_error_log_key == key
+            and self.instagram_last_error_logged_at is not None
+            and (now - self.instagram_last_error_logged_at).total_seconds() < INSTAGRAM_ERROR_LOG_COOLDOWN_SECONDS
+        ):
+            return
+
+        self.instagram_last_error_log_key = key
+        self.instagram_last_error_logged_at = now
+        if with_traceback:
+            LOGGER.exception(message)
+        else:
+            LOGGER.warning(message)
 
     async def on_message(self, message: discord.Message) -> None:
         if isinstance(message.channel, discord.DMChannel):
@@ -825,7 +958,8 @@ class DyadiaGuardianBot(commands.Bot):
                 await self.handle_staff_application_continue(interaction, custom_id)
                 return
             if custom_id == "staff_application:open":
-                await interaction.response.send_message(
+                await self.send_interaction_message(
+                    interaction,
                     "This referee application panel is outdated. Please use a newly posted panel.",
                     ephemeral=True,
                 )
@@ -1405,9 +1539,13 @@ class DyadiaGuardianBot(commands.Bot):
     async def send_modlog(self, embed: discord.Embed) -> None:
         channel = self.get_channel(self.settings.mod_log_channel_id)
         if channel is None:
-            channel = await self.fetch_channel(self.settings.mod_log_channel_id)
+            try:
+                channel = await self.fetch_channel(self.settings.mod_log_channel_id)
+            except discord.HTTPException:
+                LOGGER.exception("Could not fetch mod log channel %s", self.settings.mod_log_channel_id)
+                return
         if isinstance(channel, discord.TextChannel):
-            await channel.send(embed=embed)
+            await self.safe_send_embed(channel, embed, "Mod log message")
         else:
             LOGGER.warning("Configured mod log channel is not a text channel: %s", self.settings.mod_log_channel_id)
 
@@ -1493,18 +1631,18 @@ class DyadiaGuardianBot(commands.Bot):
     async def send_server_log(self, embed: discord.Embed) -> Optional[discord.Message]:
         channel = await self.get_server_log_channel()
         if channel is not None:
-            return await channel.send(embed=embed)
+            return await self.safe_send_embed(channel, embed, "Server log message")
         return None
 
     async def send_invite_log(self, embed: discord.Embed) -> None:
         channel = await self.get_invite_log_channel()
         if channel is not None:
-            await channel.send(embed=embed)
+            await self.safe_send_embed(channel, embed, "Invite log message")
 
     async def send_verification_log(self, embed: discord.Embed) -> None:
         channel = await self.get_verification_log_channel()
         if channel is not None:
-            await channel.send(embed=embed)
+            await self.safe_send_embed(channel, embed, "Verification log message")
 
     def create_server_log_embed(self, title: str, color: discord.Color) -> discord.Embed:
         embed = discord.Embed(title=title, color=color, timestamp=utc_now())
@@ -1617,6 +1755,26 @@ class DyadiaGuardianBot(commands.Bot):
             return format_channel_name(raw_name, uppercase=True)[:100] or "STATS"
         return format_stats_display_name(raw_name) or "STATS"
 
+    def can_rename_stats_channel(self, channel: discord.abc.GuildChannel, new_name: str) -> bool:
+        if channel.name == new_name:
+            return False
+
+        last_rename_at = self.stats_channel_last_rename_at.get(channel.id)
+        if last_rename_at is None:
+            return True
+
+        elapsed_seconds = (utc_now() - last_rename_at).total_seconds()
+        if elapsed_seconds >= SERVER_STATS_RENAME_COOLDOWN_SECONDS:
+            return True
+
+        LOGGER.info(
+            "Skipping stats channel %s rename to %s; last rename was %.0fs ago.",
+            channel.id,
+            new_name,
+            elapsed_seconds,
+        )
+        return False
+
     async def update_server_stats_channel_name(
         self,
         guild: discord.Guild,
@@ -1644,14 +1802,19 @@ class DyadiaGuardianBot(commands.Bot):
             boosters=boosters,
         )
         new_name = self.render_stats_channel_name(channel, raw_name)
-        if channel.name == new_name:
+        if not self.can_rename_stats_channel(channel, new_name):
             return
 
         try:
             await channel.edit(name=new_name, reason="Updating server stats channel name")
+            self.stats_channel_last_rename_at[channel.id] = utc_now()
             LOGGER.info("Updated server stats channel %s name to %s for guild %s", channel.id, new_name, guild.id)
-        except discord.HTTPException:
-            LOGGER.exception("Failed to update server stats channel %s for guild %s", channel.id, guild.id)
+        except discord.HTTPException as error:
+            if self.is_discord_rate_limit(error):
+                self.stats_channel_last_rename_at[channel.id] = utc_now()
+                LOGGER.warning("Discord rate-limited server stats channel %s rename for guild %s: %s", channel.id, guild.id, error)
+            else:
+                LOGGER.exception("Failed to update server stats channel %s for guild %s", channel.id, guild.id)
 
     async def update_named_stats_channel(
         self,
@@ -1675,14 +1838,19 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         new_name = self.render_stats_channel_name(channel, f"{label}: {value}")
-        if channel.name == new_name:
+        if not self.can_rename_stats_channel(channel, new_name):
             return
 
         try:
             await channel.edit(name=new_name, reason="Updating server stats channel name")
+            self.stats_channel_last_rename_at[channel.id] = utc_now()
             LOGGER.info("Updated %s channel %s name to %s for guild %s", label, channel.id, new_name, guild.id)
-        except discord.HTTPException:
-            LOGGER.exception("Failed to update %s channel %s for guild %s", label, channel.id, guild.id)
+        except discord.HTTPException as error:
+            if self.is_discord_rate_limit(error):
+                self.stats_channel_last_rename_at[channel.id] = utc_now()
+                LOGGER.warning("Discord rate-limited %s channel %s rename for guild %s: %s", label, channel.id, guild.id, error)
+            else:
+                LOGGER.exception("Failed to update %s channel %s for guild %s", label, channel.id, guild.id)
 
     async def update_detailed_server_stats_channels(self, guild: discord.Guild, stats: dict[str, int]) -> None:
         await self.update_named_stats_channel(
@@ -1717,6 +1885,7 @@ class DyadiaGuardianBot(commands.Bot):
         )
 
     async def log_guild_server_stats(self, guild: discord.Guild) -> None:
+        channel: Optional[discord.TextChannel] = None
         try:
             online_members, total_members = await self.fetch_guild_counts(guild)
             stats = self.get_precise_guild_stats(
@@ -1741,7 +1910,7 @@ class DyadiaGuardianBot(commands.Bot):
                     total_members,
                     boosters,
                 )
-                await channel.send(embed=embed)
+                await self.safe_send_embed(channel, embed, "Server stats message")
             else:
                 LOGGER.warning("No server log channel available for guild %s; skipping stats embed.", guild.id)
 
@@ -1763,13 +1932,29 @@ class DyadiaGuardianBot(commands.Bot):
                 stats["all_members"],
                 boosters,
             )
-        except discord.HTTPException:
-            LOGGER.exception("Failed to send server stats for guild %s to channel %s", guild.id, channel.id)
+        except discord.HTTPException as error:
+            if self.is_discord_rate_limit(error):
+                LOGGER.warning(
+                    "Discord rate-limited server stats for guild %s in channel %s: %s",
+                    guild.id,
+                    getattr(channel, "id", "unknown"),
+                    error,
+                )
+            else:
+                LOGGER.exception("Failed to send server stats for guild %s to channel %s", guild.id, getattr(channel, "id", "unknown"))
 
     async def log_all_server_stats(self) -> None:
+        if self.server_stats_running:
+            LOGGER.info("Server stats loop is already running; skipping overlapping run.")
+            return
+
+        self.server_stats_running = True
         LOGGER.info("Running server stats loop for %s guild(s)", len(self.guilds))
-        for guild in self.guilds:
-            await self.log_guild_server_stats(guild)
+        try:
+            for guild in self.guilds:
+                await self.log_guild_server_stats(guild)
+        finally:
+            self.server_stats_running = False
 
     async def find_recent_audit_actor(
         self,
@@ -2649,10 +2834,7 @@ class DyadiaGuardianBot(commands.Bot):
     async def ensure_staff(self, interaction: discord.Interaction, permission: str) -> bool:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if member is None or not self.has_staff_access(member, permission):
-            if interaction.response.is_done():
-                await interaction.followup.send(NO_PERMISSION, ephemeral=True)
-            else:
-                await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
+            await self.send_interaction_message(interaction, NO_PERMISSION, ephemeral=True)
             return False
         return True
 
@@ -2976,7 +3158,9 @@ class DyadiaGuardianBot(commands.Bot):
             f"Poll interval: **{self.settings.instagram_poll_minutes} minute(s)**",
             f"Target channel: {channel.mention if channel is not None else 'Not available'}",
             f"Tracked sent items: **{len(self.instagram_seen_order)}**",
+            f"Last check: **{self.instagram_last_checked_at.isoformat() if self.instagram_last_checked_at else 'Never'}**",
             f"Last successful check: **{self.instagram_last_success_at.isoformat() if self.instagram_last_success_at else 'Never'}**",
+            f"Next automatic retry: **{self.instagram_next_retry_at.isoformat() if self.instagram_next_retry_at else 'Normal schedule'}**",
             f"Last check error: **{self.instagram_last_error or 'None'}**",
         ]
         if self.settings.instagram_feed_url:
@@ -2985,10 +3169,11 @@ class DyadiaGuardianBot(commands.Bot):
             lines.insert(1, "Feed URL: Not configured")
         return make_embed("Instagram Notifications", "\n".join(lines), discord.Color.blurple())
 
-    async def poll_instagram_feed_once(self) -> int:
+    async def poll_instagram_feed_once(self, *, force: bool = False) -> int:
         if not self.instagram_notifications_enabled():
             self.instagram_last_checked_at = utc_now()
             self.instagram_last_error = "Instagram feed URL or notification channel is not configured."
+            self.instagram_next_retry_at = None
             return 0
 
         channel = await self.get_instagram_notification_channel()
@@ -2997,27 +3182,62 @@ class DyadiaGuardianBot(commands.Bot):
             self.instagram_last_error = "Configured Instagram notification channel could not be resolved."
             return 0
 
+        now = utc_now()
+        if not force and self.instagram_next_retry_at is not None and now < self.instagram_next_retry_at:
+            self.instagram_last_checked_at = now
+            LOGGER.info("Skipping Instagram feed poll until %s because the feed is in HTTP error backoff.", self.instagram_next_retry_at)
+            return 0
+
         try:
             entries = await self.fetch_instagram_feed()
+        except urllib_error.HTTPError as exc:
+            self.instagram_last_checked_at = utc_now()
+            reason = exc.reason or "HTTP error"
+            self.instagram_last_error = f"Feed provider returned HTTP {exc.code} {reason}."
+            if exc.code in {401, 402, 403, 404}:
+                self.instagram_next_retry_at = self.instagram_last_checked_at + timedelta(seconds=INSTAGRAM_HTTP_ERROR_BACKOFF_SECONDS)
+            else:
+                self.instagram_next_retry_at = None
+            if exc.code == 402:
+                self.log_instagram_poll_failure(
+                    f"http:{exc.code}",
+                    "Instagram feed provider returned HTTP 402 Payment Required. Check the RSS.app feed plan or replace INSTAGRAM_FEED_URL.",
+                )
+            else:
+                self.log_instagram_poll_failure(
+                    f"http:{exc.code}",
+                    f"Instagram feed fetch failed with HTTP {exc.code} {reason}.",
+                )
+            return 0
         except ET.ParseError:
             self.instagram_last_checked_at = utc_now()
             self.instagram_last_error = "Feed XML could not be parsed."
-            LOGGER.exception("Instagram feed XML could not be parsed.")
+            self.instagram_next_retry_at = None
+            self.log_instagram_poll_failure("parse", "Instagram feed XML could not be parsed.", with_traceback=True)
             return 0
         except urllib_error.URLError as exc:
             self.instagram_last_checked_at = utc_now()
             self.instagram_last_error = str(exc.reason) if getattr(exc, "reason", None) else str(exc)
-            LOGGER.exception("Instagram feed fetch failed.")
+            self.instagram_next_retry_at = None
+            self.log_instagram_poll_failure(
+                f"url:{self.instagram_last_error}",
+                f"Instagram feed fetch failed: {self.instagram_last_error}",
+                with_traceback=True,
+            )
             return 0
         except Exception:
             self.instagram_last_checked_at = utc_now()
             self.instagram_last_error = "Unexpected feed polling error."
-            LOGGER.exception("Unexpected Instagram feed polling error.")
+            self.instagram_next_retry_at = None
+            self.log_instagram_poll_failure("unexpected", "Unexpected Instagram feed polling error.", with_traceback=True)
             return 0
 
         self.instagram_last_checked_at = utc_now()
         self.instagram_last_success_at = self.instagram_last_checked_at
         self.instagram_last_error = None
+        self.instagram_next_retry_at = None
+        self.instagram_last_error_log_key = None
+        self.instagram_last_error_logged_at = None
 
         if not entries:
             return 0
@@ -3032,10 +3252,12 @@ class DyadiaGuardianBot(commands.Bot):
         new_entries = [entry for entry in entries if entry.entry_id not in self.instagram_seen_ids]
         sent_count = 0
         for entry in new_entries:
-            try:
-                await channel.send(embed=self.create_instagram_notification_embed(entry))
-            except discord.HTTPException:
-                LOGGER.exception("Failed to send Instagram notification for %s", entry.link)
+            message = await self.safe_send_embed(
+                channel,
+                self.create_instagram_notification_embed(entry),
+                f"Instagram notification for {entry.link}",
+            )
+            if message is None:
                 self.instagram_last_error = f"Failed to send message for {entry.link}"
                 continue
 
@@ -3610,7 +3832,7 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         await interaction.response.defer(ephemeral=True)
-        sent_count = await self.poll_instagram_feed_once()
+        sent_count = await self.poll_instagram_feed_once(force=True)
         channel = await self.get_instagram_notification_channel()
         embed = self.create_instagram_status_embed(channel)
         embed.add_field(
@@ -3845,7 +4067,7 @@ class DyadiaGuardianBot(commands.Bot):
         if not await self.ensure_staff(interaction, "manage_guild"):
             return
         if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
             return
 
         target_channel = channel
@@ -3853,11 +4075,29 @@ class DyadiaGuardianBot(commands.Bot):
             if isinstance(interaction.channel, discord.TextChannel):
                 target_channel = interaction.channel
             else:
-                await interaction.response.send_message("Please choose a text channel for the application panel.", ephemeral=True)
+                await self.send_interaction_message(
+                    interaction,
+                    "Please choose a text channel for the application panel.",
+                    ephemeral=True,
+                )
                 return
 
-        await target_channel.send(embed=self.create_staff_application_panel_embed(), view=self.staff_application_view)
-        await interaction.response.send_message(
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        try:
+            await target_channel.send(embed=self.create_staff_application_panel_embed(), view=self.staff_application_view)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post referee application panel in channel %s", target_channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not post the application panel right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(
+            interaction,
             f"Referee application panel posted in {target_channel.mention}.",
             ephemeral=True,
         )
@@ -3890,7 +4130,7 @@ class DyadiaGuardianBot(commands.Bot):
         if not await self.ensure_staff(interaction, "manage_guild"):
             return
         if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
             return
 
         target_channel = channel
@@ -3898,12 +4138,20 @@ class DyadiaGuardianBot(commands.Bot):
             if isinstance(interaction.channel, discord.TextChannel):
                 target_channel = interaction.channel
             else:
-                await interaction.response.send_message("Please choose a text channel containing the application panel.", ephemeral=True)
+                await self.send_interaction_message(
+                    interaction,
+                    "Please choose a text channel containing the application panel.",
+                    ephemeral=True,
+                )
                 return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
 
         panel_message = await self.find_staff_application_panel_message(target_channel)
         if panel_message is None:
-            await interaction.response.send_message(
+            await self.send_interaction_message(
+                interaction,
                 "I could not find the active referee application panel message in that channel.",
                 ephemeral=True,
             )
@@ -3916,13 +4164,15 @@ class DyadiaGuardianBot(commands.Bot):
                 "Failed to disable referee application panel in channel %s",
                 target_channel.id,
             )
-            await interaction.response.send_message(
+            await self.send_interaction_message(
+                interaction,
                 "I could not disable the panel right now. Please try again later.",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
+        await self.send_interaction_message(
+            interaction,
             f"Referee application panel disabled in {target_channel.mention}.",
             ephemeral=True,
         )
@@ -3935,7 +4185,7 @@ class DyadiaGuardianBot(commands.Bot):
         if not await self.ensure_staff(interaction, "manage_guild"):
             return
         if interaction.guild is None:
-            await interaction.response.send_message("This command can only be used inside a server.", ephemeral=True)
+            await self.send_interaction_message(interaction, "This command can only be used inside a server.", ephemeral=True)
             return
 
         target_channel = channel
@@ -3943,23 +4193,49 @@ class DyadiaGuardianBot(commands.Bot):
             if isinstance(interaction.channel, discord.TextChannel):
                 target_channel = interaction.channel
             else:
-                await interaction.response.send_message("Please choose a text channel for the verification panel.", ephemeral=True)
+                await self.send_interaction_message(
+                    interaction,
+                    "Please choose a text channel for the verification panel.",
+                    ephemeral=True,
+                )
                 return
 
-        await target_channel.send(embed=self.create_verification_panel_embed(interaction.guild), view=self.verification_view)
-        await interaction.response.send_message(
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
+            return
+
+        try:
+            await target_channel.send(embed=self.create_verification_panel_embed(interaction.guild), view=self.verification_view)
+        except discord.HTTPException:
+            LOGGER.exception("Failed to post verification panel in channel %s", target_channel.id)
+            await self.send_interaction_message(
+                interaction,
+                "I could not post the verification panel right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        await self.send_interaction_message(
+            interaction,
             f"Verification panel posted in {target_channel.mention}.",
             ephemeral=True,
         )
 
     async def handle_verification_button(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("This verification button can only be used inside the server.", ephemeral=True)
+            await self.send_interaction_message(
+                interaction,
+                "This verification button can only be used inside the server.",
+                ephemeral=True,
+            )
+            return
+
+        if not await self.defer_interaction_once(interaction, ephemeral=True):
             return
 
         role = self.get_verified_role(interaction.guild)
         if role is None:
-            await interaction.response.send_message(
+            await self.send_interaction_message(
+                interaction,
                 "The `Verified` role was not found. Ask a moderator to create it or set `VERIFIED_ROLE_ID`.",
                 ephemeral=True,
             )
@@ -3967,11 +4243,12 @@ class DyadiaGuardianBot(commands.Bot):
 
         role_error = self.can_manage_role(interaction.guild.me or interaction.user, role)
         if role_error is not None:
-            await interaction.response.send_message(role_error, ephemeral=True)
+            await self.send_interaction_message(interaction, role_error, ephemeral=True)
             return
 
         if role in interaction.user.roles:
-            await interaction.response.send_message(
+            await self.send_interaction_message(
+                interaction,
                 "You have already verified and already have the Verified role.",
                 ephemeral=True,
             )
@@ -3981,14 +4258,16 @@ class DyadiaGuardianBot(commands.Bot):
             await interaction.user.add_roles(role, reason="HOK Dyadia verification completed")
         except discord.HTTPException:
             LOGGER.exception("Failed to assign verified role to %s in guild %s", interaction.user.id, interaction.guild.id)
-            await interaction.response.send_message(
+            await self.send_interaction_message(
+                interaction,
                 "I could not assign the verification role. Please contact a moderator.",
                 ephemeral=True,
             )
             return
 
         await self.send_verification_log(self.create_verification_log_embed(interaction.user, role))
-        await interaction.response.send_message(
+        await self.send_interaction_message(
+            interaction,
             f"Verification complete. You have been given {role.mention} and can now access all server channels.",
             ephemeral=True,
         )
