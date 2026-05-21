@@ -1374,18 +1374,15 @@ class DyadiaGuardianBot(commands.Bot):
             timestamp=utc_now(),
         )
         embed.description = (
-            "╔═══━━━━─━━─━───── • ───━━─━─━─━─━━═══╗\n"
-            ":crown: **HONOR OF KINGS** **NORTHEAST INDIA**\n"
-            "╚═══━━━━─━━─━───── • ───━━─━──━─━━━═══╝\n\n"
-            f"Welcome to the server, {member.mention} :crossed_swords:\n"
-            "Prepare to battle, connect, and rise with the community!\n\n"
-            "╔═══━━━─────〔START HERE〕──━─━─━━═══╗\n"
-            f"     :arrow_arrow~1: Verify yourself in {verify_channel}\n"
-            f"     :arrow_arrow~1: Read {server_info_channel} carefully\n"
-            f"     :arrow_arrow~1: Introduce yourself in {intro_channel}\n"
-            f"     :arrow_arrow~1: Join the chats in {general_chat_channel}\n"
-            "╚═══━━━━─━━─━───── • ───━━─━──━─━━━═══╝\n\n"
-            ":fire: **Play • Compete • Conquer** :fire:"
+            "✨ 👑 **Welcome to Honor Of Kings | Northeast India** 👑 ✨\n\n"
+            f"Hey {member.mention}, welcome to the community! ⚔️\n"
+            "Get ready to battle, squad up, and connect with players across Northeast India.\n\n"
+            f"<a:arrow_arrow:1505550701843976412> Verify yourself in {verify_channel}\n"
+            f"<a:arrow_arrow:1505550701843976412> Read {server_info_channel} for rules & updates\n"
+            f"<a:arrow_arrow:1505550701843976412> Introduce yourself in {intro_channel}\n"
+            f"<a:arrow_arrow:1505550701843976412> Chat with everyone in {general_chat_channel}\n"
+            "<a:arrow_arrow:1505550701843976412> Find teammates, squad up & enjoy the server!\n\n"
+            "🔥 **Play • Compete • Conquer** 🔥"
         )
         embed.set_footer(text=BRAND_FOOTER)
         embed.set_image(url=self.settings.welcome_banner_url or DEFAULT_WELCOME_BANNER_URL)
