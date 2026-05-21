@@ -42,6 +42,10 @@ BRAND_FOOTER = "Dyadia Guardian of HOK | NE India"
 QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
+AFK_DATA_PATH = Path("afk_data.json")
+AFK_DEFAULT_REASON = "AFK"
+AFK_REASON_LIMIT = 200
+AFK_MENTION_REPLY_LIMIT = 5
 SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
 CHANNEL_SEND_THROTTLE_SECONDS = 1.1
 DISCORD_RATE_LIMIT_STATUS = 429
@@ -70,6 +74,14 @@ class ModLogEntry:
     reason: str
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     duration_text: Optional[str] = None
+
+
+@dataclass
+class AFKStatus:
+    guild_id: int
+    user_id: int
+    reason: str = AFK_DEFAULT_REASON
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass
@@ -542,6 +554,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.anti_raid_states: Dict[int, AntiRaidState] = {}
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
         self.no_link_channels: Dict[int, set[int]] = {}
+        self.afk_statuses: Dict[int, Dict[int, AFKStatus]] = {}
         self.server_stats_logged_once = False
         self.server_stats_running = False
         self.stats_channel_last_rename_at: Dict[int, datetime] = {}
@@ -560,6 +573,7 @@ class DyadiaGuardianBot(commands.Bot):
             await asyncio.to_thread(self.ensure_postgres_schema)
         await self.load_autoreact_data()
         await self.load_no_link_data()
+        await self.load_afk_data()
         self.register_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
@@ -608,6 +622,17 @@ class DyadiaGuardianBot(commands.Bot):
                             guild_id BIGINT NOT NULL,
                             channel_id BIGINT NOT NULL,
                             PRIMARY KEY (guild_id, channel_id)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS afk_statuses (
+                            guild_id BIGINT NOT NULL,
+                            user_id BIGINT NOT NULL,
+                            reason TEXT NOT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            PRIMARY KEY (guild_id, user_id)
                         )
                         """
                     )
@@ -782,8 +807,10 @@ class DyadiaGuardianBot(commands.Bot):
             return
 
         if message.guild is not None and isinstance(message.author, discord.Member):
+            await self.clear_afk_on_message(message)
             if await self.handle_no_link_message(message):
                 return
+            await self.handle_afk_mentions(message)
 
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
@@ -947,6 +974,11 @@ class DyadiaGuardianBot(commands.Bot):
                 inline=False,
             )
             embed.add_field(
+                name="Community",
+                value="`/afk` set yourself as away until you send a message again.",
+                inline=False,
+            )
+            embed.add_field(
                 name="Anti-Raid",
                 value=(
                     "`/antiraid status` show protection status\n"
@@ -1051,6 +1083,11 @@ class DyadiaGuardianBot(commands.Bot):
         @app_commands.describe(user="Member to inspect")
         async def modlogs(interaction: discord.Interaction, user: discord.User) -> None:
             await self.handle_modlogs(interaction, user)
+
+        @tree.command(name="afk", description="Set yourself as AFK until you send a message")
+        @app_commands.describe(reason="Optional reason to show when someone mentions you")
+        async def afk(interaction: discord.Interaction, reason: Optional[str] = None) -> None:
+            await self.handle_afk(interaction, reason)
 
         staffapplypanel = app_commands.Group(
             name="staffapplypanel",
@@ -2706,6 +2743,266 @@ class DyadiaGuardianBot(commands.Bot):
     async def persist_no_link_data(self) -> None:
         await asyncio.to_thread(self.save_no_link_data)
 
+    async def load_afk_data(self) -> None:
+        self.afk_statuses = await asyncio.to_thread(self._load_afk_data_sync)
+
+    def _load_afk_data_sync(self) -> Dict[int, Dict[int, AFKStatus]]:
+        if self.uses_postgres:
+            loaded_data = self._load_afk_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_afk_data_from_json()
+            if fallback_data:
+                self._save_afk_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL AFK data from %s", AFK_DATA_PATH)
+            return fallback_data
+
+        return self._load_afk_data_from_json()
+
+    def _load_afk_data_from_json(self) -> Dict[int, Dict[int, AFKStatus]]:
+        loaded_data: Dict[int, Dict[int, AFKStatus]] = {}
+        if not AFK_DATA_PATH.exists():
+            LOGGER.info("AFK data file %s not found. A new one will be created on first use.", AFK_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(AFK_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load AFK data from %s", AFK_DATA_PATH)
+            return loaded_data
+
+        for guild_id, users in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(users, dict):
+                continue
+
+            parsed_statuses: Dict[int, AFKStatus] = {}
+            for user_id, payload in users.items():
+                try:
+                    parsed_user_id = int(user_id)
+                except (TypeError, ValueError):
+                    continue
+
+                if isinstance(payload, dict):
+                    raw_reason = payload.get("reason", AFK_DEFAULT_REASON)
+                    created_at = self.parse_stored_datetime(payload.get("created_at"))
+                else:
+                    raw_reason = payload
+                    created_at = utc_now()
+
+                parsed_statuses[parsed_user_id] = AFKStatus(
+                    guild_id=parsed_guild_id,
+                    user_id=parsed_user_id,
+                    reason=self.normalize_afk_reason(str(raw_reason)),
+                    created_at=created_at,
+                )
+
+            if parsed_statuses:
+                loaded_data[parsed_guild_id] = parsed_statuses
+
+        LOGGER.info("Loaded AFK data for %s guild(s) from %s", len(loaded_data), AFK_DATA_PATH)
+        return loaded_data
+
+    def _load_afk_data_from_postgres(self) -> Dict[int, Dict[int, AFKStatus]]:
+        loaded_data: Dict[int, Dict[int, AFKStatus]] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT guild_id, user_id, reason, created_at
+                        FROM afk_statuses
+                        """
+                    )
+                    for guild_id, user_id, reason, created_at in cur.fetchall():
+                        parsed_guild_id = int(guild_id)
+                        loaded_data.setdefault(parsed_guild_id, {})[int(user_id)] = AFKStatus(
+                            guild_id=parsed_guild_id,
+                            user_id=int(user_id),
+                            reason=self.normalize_afk_reason(str(reason)),
+                            created_at=self.parse_stored_datetime(created_at),
+                        )
+        except Exception:
+            LOGGER.exception("Failed to load AFK data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded AFK data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def save_afk_data(self) -> None:
+        if self.uses_postgres:
+            self._save_afk_data_to_postgres(self.afk_statuses)
+            return
+        self._save_afk_data_to_json(self.afk_statuses)
+
+    def _save_afk_data_to_json(self, statuses: Dict[int, Dict[int, AFKStatus]]) -> None:
+        serialized = {
+            str(guild_id): {
+                str(user_id): {
+                    "reason": status.reason,
+                    "created_at": status.created_at.astimezone(timezone.utc).isoformat(),
+                }
+                for user_id, status in user_statuses.items()
+            }
+            for guild_id, user_statuses in statuses.items()
+            if user_statuses
+        }
+        try:
+            AFK_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save AFK data to %s", AFK_DATA_PATH)
+
+    def _save_afk_data_to_postgres(self, statuses: Dict[int, Dict[int, AFKStatus]]) -> None:
+        rows = [
+            (guild_id, user_id, status.reason, status.created_at)
+            for guild_id, user_statuses in statuses.items()
+            for user_id, status in user_statuses.items()
+        ]
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM afk_statuses")
+                    if rows:
+                        cur.executemany(
+                            """
+                            INSERT INTO afk_statuses (guild_id, user_id, reason, created_at)
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            rows,
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save AFK data to PostgreSQL.")
+
+    async def persist_afk_data(self) -> None:
+        await asyncio.to_thread(self.save_afk_data)
+
+    @staticmethod
+    def parse_stored_datetime(value: object) -> datetime:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return utc_now()
+        else:
+            return utc_now()
+
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def format_afk_reason_for_display(reason: str) -> str:
+        return discord.utils.escape_markdown(discord.utils.escape_mentions(reason))
+
+    def normalize_afk_reason(self, reason: Optional[str]) -> str:
+        cleaned = normalize_optional_text(reason or "")
+        if cleaned is None:
+            return AFK_DEFAULT_REASON
+        return truncate_text(cleaned, AFK_REASON_LIMIT)
+
+    def get_afk_status(self, guild_id: int, user_id: int) -> Optional[AFKStatus]:
+        return self.afk_statuses.get(guild_id, {}).get(user_id)
+
+    async def set_afk_status(self, guild_id: int, user_id: int, reason: Optional[str]) -> AFKStatus:
+        status = AFKStatus(
+            guild_id=guild_id,
+            user_id=user_id,
+            reason=self.normalize_afk_reason(reason),
+        )
+        self.afk_statuses.setdefault(guild_id, {})[user_id] = status
+        await self.persist_afk_data()
+        return status
+
+    async def clear_afk_status(self, guild_id: int, user_id: int) -> Optional[AFKStatus]:
+        guild_statuses = self.afk_statuses.get(guild_id)
+        if not guild_statuses:
+            return None
+
+        status = guild_statuses.pop(user_id, None)
+        if not guild_statuses:
+            self.afk_statuses.pop(guild_id, None)
+        if status is not None:
+            await self.persist_afk_data()
+        return status
+
+    def format_afk_elapsed(self, status: AFKStatus) -> str:
+        elapsed = utc_now() - status.created_at
+        if elapsed.total_seconds() < 0:
+            elapsed = timedelta(seconds=0)
+        return format_duration(elapsed)
+
+    async def clear_afk_on_message(self, message: discord.Message) -> None:
+        if message.guild is None:
+            return
+
+        status = await self.clear_afk_status(message.guild.id, message.author.id)
+        if status is None:
+            return
+
+        try:
+            await message.channel.send(
+                f"Welcome back {message.author.mention}, I removed your AFK status.",
+                delete_after=8,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except discord.HTTPException:
+            LOGGER.warning(
+                "Failed to send AFK return message in guild %s channel %s",
+                message.guild.id,
+                message.channel.id,
+            )
+
+    async def handle_afk_mentions(self, message: discord.Message) -> None:
+        if message.guild is None or not message.mentions:
+            return
+
+        guild_statuses = self.afk_statuses.get(message.guild.id, {})
+        if not guild_statuses:
+            return
+
+        lines = []
+        seen_user_ids: set[int] = set()
+        for user in message.mentions:
+            if user.id == message.author.id or user.id in seen_user_ids:
+                continue
+
+            status = guild_statuses.get(user.id)
+            if status is None:
+                continue
+
+            seen_user_ids.add(user.id)
+            display_name = discord.utils.escape_markdown(getattr(user, "display_name", user.name))
+            reason = self.format_afk_reason_for_display(status.reason)
+            lines.append(f"**{display_name}** is AFK: {reason} (since {self.format_afk_elapsed(status)} ago)")
+
+        if not lines:
+            return
+
+        if len(lines) > AFK_MENTION_REPLY_LIMIT:
+            hidden_count = len(lines) - AFK_MENTION_REPLY_LIMIT
+            lines = lines[:AFK_MENTION_REPLY_LIMIT]
+            lines.append(f"...and {hidden_count} more AFK member{'s' if hidden_count != 1 else ''}.")
+
+        try:
+            await message.reply(
+                "\n".join(lines),
+                mention_author=False,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            LOGGER.warning(
+                "Failed to send AFK mention reply in guild %s channel %s",
+                message.guild.id,
+                message.channel.id,
+            )
+
     def message_contains_blocked_link(self, content: str) -> bool:
         return bool(URL_RE.search(content))
 
@@ -3104,6 +3401,24 @@ class DyadiaGuardianBot(commands.Bot):
             discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def handle_afk(self, interaction: discord.Interaction, reason: Optional[str]) -> None:
+        if interaction.guild is None:
+            await self.send_interaction_message(
+                interaction,
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        status = await self.set_afk_status(interaction.guild.id, interaction.user.id, reason)
+        safe_reason = self.format_afk_reason_for_display(status.reason)
+        await self.send_interaction_message(
+            interaction,
+            f"You're now AFK: **{safe_reason}**\nI'll let people know when they mention you.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def handle_qotd(
         self,
@@ -4209,7 +4524,7 @@ class DyadiaGuardianBot(commands.Bot):
             LOGGER.info("Persistent storage backend: PostgreSQL")
         else:
             LOGGER.info(
-                "Persistent storage backend: local JSON files for auto-react and no-link data; modlogs stay in memory."
+                "Persistent storage backend: local JSON files for auto-react, no-link, and AFK data; modlogs stay in memory."
             )
 
     @tasks.loop(minutes=5)
