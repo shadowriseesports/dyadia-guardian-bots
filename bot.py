@@ -43,9 +43,12 @@ QOTD_ROLE_NAME = "❓QOTD"
 AUTOREACT_DATA_PATH = Path("autoreact_data.json")
 NO_LINK_DATA_PATH = Path("no_link_channels.json")
 AFK_DATA_PATH = Path("afk_data.json")
+PREFIX_DATA_PATH = Path("prefix_data.json")
 AFK_DEFAULT_REASON = "AFK"
 AFK_REASON_LIMIT = 200
 AFK_MENTION_REPLY_LIMIT = 5
+DEFAULT_COMMAND_PREFIX = "!"
+MAX_COMMAND_PREFIX_LENGTH = 10
 SERVER_STATS_RENAME_COOLDOWN_SECONDS = 660
 CHANNEL_SEND_THROTTLE_SECONDS = 1.1
 DISCORD_RATE_LIMIT_STATUS = 429
@@ -540,7 +543,7 @@ class DyadiaGuardianBot(commands.Bot):
         intents.voice_states = True
 
         super().__init__(
-            command_prefix=commands.when_mentioned,
+            command_prefix=self.resolve_command_prefix,
             intents=intents,
             help_command=None,
         )
@@ -555,6 +558,7 @@ class DyadiaGuardianBot(commands.Bot):
         self.autoreact_configs: Dict[int, Dict[int, AutoReactionConfig]] = {}
         self.no_link_channels: Dict[int, set[int]] = {}
         self.afk_statuses: Dict[int, Dict[int, AFKStatus]] = {}
+        self.command_prefixes: Dict[int, str] = {}
         self.server_stats_logged_once = False
         self.server_stats_running = False
         self.stats_channel_last_rename_at: Dict[int, datetime] = {}
@@ -568,13 +572,20 @@ class DyadiaGuardianBot(commands.Bot):
         self.verification_view = VerificationView()
         self.staff_application_view = StaffApplicationView()
 
+    async def resolve_command_prefix(self, bot: commands.Bot, message: discord.Message) -> List[str]:
+        if message.guild is None:
+            return commands.when_mentioned_or(DEFAULT_COMMAND_PREFIX)(bot, message)
+        return commands.when_mentioned_or(self.get_guild_prefix(message.guild.id))(bot, message)
+
     async def setup_hook(self) -> None:
         if self.uses_postgres:
             await asyncio.to_thread(self.ensure_postgres_schema)
+        await self.load_prefix_data()
         await self.load_autoreact_data()
         await self.load_no_link_data()
         await self.load_afk_data()
         self.register_commands()
+        self.register_prefix_commands()
         self.add_view(self.modmail_view)
         self.add_view(self.close_modmail_view)
         self.add_view(self.verification_view)
@@ -636,6 +647,14 @@ class DyadiaGuardianBot(commands.Bot):
                         )
                         """
                     )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS command_prefixes (
+                            guild_id BIGINT PRIMARY KEY,
+                            prefix TEXT NOT NULL
+                        )
+                        """
+                    )
                 conn.commit()
         except Exception:
             LOGGER.exception("Failed to ensure PostgreSQL schema.")
@@ -683,6 +702,16 @@ class DyadiaGuardianBot(commands.Bot):
             "An unexpected error occurred while running that command.",
             ephemeral=True,
         )
+
+    async def on_command_error(self, context: commands.Context, error: commands.CommandError) -> None:
+        if isinstance(error, commands.CommandNotFound):
+            return
+
+        LOGGER.error("Prefix command failed", exc_info=error)
+        try:
+            await context.send("An unexpected error occurred while running that command.")
+        except discord.HTTPException:
+            LOGGER.warning("Failed to send prefix command error message in channel %s", context.channel.id)
 
     async def on_error(self, event_method: str, /, *args, **kwargs) -> None:
         LOGGER.exception("Unhandled Discord event error in %s", event_method)
@@ -811,6 +840,11 @@ class DyadiaGuardianBot(commands.Bot):
             if await self.handle_no_link_message(message):
                 return
             await self.handle_afk_mentions(message)
+
+        context = await self.get_context(message)
+        if context.valid:
+            await self.invoke(context)
+            return
 
         if isinstance(message.channel, discord.Thread):
             await self.handle_moderator_reply(message)
@@ -975,7 +1009,11 @@ class DyadiaGuardianBot(commands.Bot):
             )
             embed.add_field(
                 name="Community",
-                value="`/afk` set yourself as away until you send a message again.",
+                value=(
+                    "`/afk` set yourself as away until you send a message again\n"
+                    "`/prefix show` view the command prefix\n"
+                    "`/prefix set` or `/prefix reset` manage prefix commands"
+                ),
                 inline=False,
             )
             embed.add_field(
@@ -1088,6 +1126,21 @@ class DyadiaGuardianBot(commands.Bot):
         @app_commands.describe(reason="Optional reason to show when someone mentions you")
         async def afk(interaction: discord.Interaction, reason: Optional[str] = None) -> None:
             await self.handle_afk(interaction, reason)
+
+        prefix_group = app_commands.Group(name="prefix", description="Manage the server command prefix")
+
+        @prefix_group.command(name="show", description="Show this server's command prefix")
+        async def prefix_show(interaction: discord.Interaction) -> None:
+            await self.handle_prefix_show(interaction)
+
+        @prefix_group.command(name="set", description="Set this server's command prefix")
+        @app_commands.describe(prefix=f"New prefix, up to {MAX_COMMAND_PREFIX_LENGTH} characters")
+        async def prefix_set(interaction: discord.Interaction, prefix: str) -> None:
+            await self.handle_prefix_set(interaction, prefix)
+
+        @prefix_group.command(name="reset", description="Reset this server's command prefix")
+        async def prefix_reset(interaction: discord.Interaction) -> None:
+            await self.handle_prefix_reset(interaction)
 
         staffapplypanel = app_commands.Group(
             name="staffapplypanel",
@@ -1207,6 +1260,32 @@ class DyadiaGuardianBot(commands.Bot):
         tree.add_command(anti_raid)
         tree.add_command(autoreact)
         tree.add_command(no_link)
+        tree.add_command(prefix_group)
+
+    def register_prefix_commands(self) -> None:
+        if self.get_command("help") is not None:
+            return
+
+        @commands.command(name="help")
+        async def help_prefix(context: commands.Context) -> None:
+            await self.handle_prefix_help(context)
+
+        @commands.command(name="afk")
+        async def afk_prefix(context: commands.Context, *, reason: Optional[str] = None) -> None:
+            await self.handle_afk_prefix(context, reason)
+
+        @commands.command(name="prefix")
+        async def prefix_prefix(
+            context: commands.Context,
+            action: Optional[str] = None,
+            *,
+            prefix: Optional[str] = None,
+        ) -> None:
+            await self.handle_prefix_command(context, action, prefix)
+
+        self.add_command(help_prefix)
+        self.add_command(afk_prefix)
+        self.add_command(prefix_prefix)
 
     def has_staff_access(self, member: discord.Member, permission: str) -> bool:
         if member.guild_permissions.administrator:
@@ -2478,6 +2557,141 @@ class DyadiaGuardianBot(commands.Bot):
             return []
         return entries
 
+    async def load_prefix_data(self) -> None:
+        self.command_prefixes = await asyncio.to_thread(self._load_prefix_data_sync)
+
+    def _load_prefix_data_sync(self) -> Dict[int, str]:
+        if self.uses_postgres:
+            loaded_data = self._load_prefix_data_from_postgres()
+            if loaded_data:
+                return loaded_data
+
+            fallback_data = self._load_prefix_data_from_json()
+            if fallback_data:
+                self._save_prefix_data_to_postgres(fallback_data)
+                LOGGER.info("Seeded PostgreSQL prefix data from %s", PREFIX_DATA_PATH)
+            return fallback_data
+
+        return self._load_prefix_data_from_json()
+
+    def _load_prefix_data_from_json(self) -> Dict[int, str]:
+        loaded_data: Dict[int, str] = {}
+        if not PREFIX_DATA_PATH.exists():
+            LOGGER.info("Prefix data file %s not found. A new one will be created on first use.", PREFIX_DATA_PATH)
+            return loaded_data
+
+        try:
+            raw = json.loads(PREFIX_DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to load prefix data from %s", PREFIX_DATA_PATH)
+            return loaded_data
+
+        for guild_id, prefix in (raw if isinstance(raw, dict) else {}).items():
+            try:
+                parsed_guild_id = int(guild_id)
+            except (TypeError, ValueError):
+                continue
+
+            parsed_prefix, error = self.validate_command_prefix(str(prefix))
+            if error is None and parsed_prefix is not None:
+                loaded_data[parsed_guild_id] = parsed_prefix
+
+        LOGGER.info("Loaded prefix data for %s guild(s) from %s", len(loaded_data), PREFIX_DATA_PATH)
+        return loaded_data
+
+    def _load_prefix_data_from_postgres(self) -> Dict[int, str]:
+        loaded_data: Dict[int, str] = {}
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT guild_id, prefix
+                        FROM command_prefixes
+                        """
+                    )
+                    for guild_id, prefix in cur.fetchall():
+                        parsed_prefix, error = self.validate_command_prefix(str(prefix))
+                        if error is None and parsed_prefix is not None:
+                            loaded_data[int(guild_id)] = parsed_prefix
+        except Exception:
+            LOGGER.exception("Failed to load prefix data from PostgreSQL.")
+            return {}
+
+        LOGGER.info("Loaded prefix data for %s guild(s) from PostgreSQL", len(loaded_data))
+        return loaded_data
+
+    def save_prefix_data(self) -> None:
+        if self.uses_postgres:
+            self._save_prefix_data_to_postgres(self.command_prefixes)
+            return
+        self._save_prefix_data_to_json(self.command_prefixes)
+
+    def _save_prefix_data_to_json(self, prefixes: Dict[int, str]) -> None:
+        serialized = {str(guild_id): prefix for guild_id, prefix in prefixes.items()}
+        try:
+            PREFIX_DATA_PATH.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        except OSError:
+            LOGGER.exception("Failed to save prefix data to %s", PREFIX_DATA_PATH)
+
+    def _save_prefix_data_to_postgres(self, prefixes: Dict[int, str]) -> None:
+        rows = list(prefixes.items())
+        try:
+            with psycopg.connect(self.settings.database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM command_prefixes")
+                    if rows:
+                        cur.executemany(
+                            """
+                            INSERT INTO command_prefixes (guild_id, prefix)
+                            VALUES (%s, %s)
+                            """,
+                            rows,
+                        )
+                conn.commit()
+        except Exception:
+            LOGGER.exception("Failed to save prefix data to PostgreSQL.")
+
+    async def persist_prefix_data(self) -> None:
+        await asyncio.to_thread(self.save_prefix_data)
+
+    def get_guild_prefix(self, guild_id: int) -> str:
+        return self.command_prefixes.get(guild_id, DEFAULT_COMMAND_PREFIX)
+
+    @staticmethod
+    def format_prefix_for_display(prefix: str) -> str:
+        escaped = discord.utils.escape_markdown(discord.utils.escape_mentions(prefix))
+        return f"`{escaped}`"
+
+    @staticmethod
+    def format_command_example(prefix: str, command: str) -> str:
+        escaped = discord.utils.escape_markdown(discord.utils.escape_mentions(f"{prefix}{command}"))
+        return f"`{escaped}`"
+
+    @staticmethod
+    def validate_command_prefix(prefix: str) -> tuple[Optional[str], Optional[str]]:
+        cleaned = prefix.strip()
+        if not cleaned:
+            return None, "Please provide a prefix."
+        if len(cleaned) > MAX_COMMAND_PREFIX_LENGTH:
+            return None, f"Prefix must be {MAX_COMMAND_PREFIX_LENGTH} characters or fewer."
+        if any(character.isspace() for character in cleaned):
+            return None, "Prefix cannot contain spaces."
+        if cleaned.startswith("/"):
+            return None, "Prefix cannot start with `/` because slash commands already use that."
+        if cleaned.startswith("<@"):
+            return None, "Mention prefixes are already supported automatically."
+        return cleaned, None
+
+    async def set_guild_prefix(self, guild_id: int, prefix: str) -> str:
+        self.command_prefixes[guild_id] = prefix
+        await self.persist_prefix_data()
+        return prefix
+
+    async def reset_guild_prefix(self, guild_id: int) -> None:
+        self.command_prefixes.pop(guild_id, None)
+        await self.persist_prefix_data()
+
     async def load_autoreact_data(self) -> None:
         self.autoreact_configs = await asyncio.to_thread(self._load_autoreact_data_sync)
 
@@ -3417,6 +3631,184 @@ class DyadiaGuardianBot(commands.Bot):
             interaction,
             f"You're now AFK: **{safe_reason}**\nI'll let people know when they mention you.",
             ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_afk_prefix(self, context: commands.Context, reason: Optional[str]) -> None:
+        if context.guild is None:
+            await context.send("This command can only be used inside a server.")
+            return
+
+        status = await self.set_afk_status(context.guild.id, context.author.id, reason)
+        safe_reason = self.format_afk_reason_for_display(status.reason)
+        await context.send(
+            f"You're now AFK: **{safe_reason}**\nI'll let people know when they mention you.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_prefix_show(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await self.send_interaction_message(
+                interaction,
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        prefix = self.get_guild_prefix(interaction.guild.id)
+        await self.send_interaction_message(
+            interaction,
+            (
+                f"Current command prefix: {self.format_prefix_for_display(prefix)}\n"
+                "Mentioning the bot also works as a prefix."
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_prefix_set(self, interaction: discord.Interaction, prefix: str) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await self.send_interaction_message(
+                interaction,
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        parsed_prefix, error = self.validate_command_prefix(prefix)
+        if error is not None or parsed_prefix is None:
+            await self.send_interaction_message(interaction, error or "Invalid prefix.", ephemeral=True)
+            return
+
+        await self.set_guild_prefix(interaction.guild.id, parsed_prefix)
+        await self.send_interaction_message(
+            interaction,
+            f"Command prefix set to {self.format_prefix_for_display(parsed_prefix)}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_prefix_reset(self, interaction: discord.Interaction) -> None:
+        if not await self.ensure_staff(interaction, "manage_guild"):
+            return
+        if interaction.guild is None:
+            await self.send_interaction_message(
+                interaction,
+                "This command can only be used inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        await self.reset_guild_prefix(interaction.guild.id)
+        await self.send_interaction_message(
+            interaction,
+            f"Command prefix reset to {self.format_prefix_for_display(DEFAULT_COMMAND_PREFIX)}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    def can_manage_prefix(self, context: commands.Context) -> bool:
+        return isinstance(context.author, discord.Member) and self.has_staff_access(context.author, "manage_guild")
+
+    async def handle_prefix_help(self, context: commands.Context) -> None:
+        prefix = self.get_guild_prefix(context.guild.id) if context.guild is not None else DEFAULT_COMMAND_PREFIX
+        embed = discord.Embed(
+            title="Dyadia Guardian Prefix Commands",
+            description=(
+                f"Current prefix: {self.format_prefix_for_display(prefix)}\n"
+                "Mentioning the bot also works as a prefix."
+            ),
+            color=discord.Color.blurple(),
+            timestamp=utc_now(),
+        )
+        embed.add_field(
+            name="Community",
+            value=self.format_command_example(prefix, "afk [reason]"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Prefix",
+            value=(
+                f"{self.format_command_example(prefix, 'prefix show')}\n"
+                f"{self.format_command_example(prefix, 'prefix set ?')}\n"
+                f"{self.format_command_example(prefix, 'prefix reset')}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Slash Commands",
+            value="Use `/help` for the full slash-command list.",
+            inline=False,
+        )
+        embed.set_footer(text=BRAND_FOOTER)
+        await context.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+    async def handle_prefix_command(
+        self,
+        context: commands.Context,
+        action: Optional[str],
+        prefix: Optional[str],
+    ) -> None:
+        if context.guild is None:
+            await context.send("This command can only be used inside a server.")
+            return
+
+        current_prefix = self.get_guild_prefix(context.guild.id)
+        normalized_action = (action or "show").strip().lower()
+
+        if normalized_action in {"show", "current"}:
+            await context.send(
+                (
+                    f"Current command prefix: {self.format_prefix_for_display(current_prefix)}\n"
+                    "Mentioning the bot also works as a prefix."
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        if normalized_action in {"set", "change"}:
+            if not self.can_manage_prefix(context):
+                await context.send(NO_PERMISSION)
+                return
+            if prefix is None:
+                await context.send(
+                    f"Usage: {self.format_command_example(current_prefix, 'prefix set ?')}",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
+            parsed_prefix, error = self.validate_command_prefix(prefix)
+            if error is not None or parsed_prefix is None:
+                await context.send(error or "Invalid prefix.")
+                return
+
+            await self.set_guild_prefix(context.guild.id, parsed_prefix)
+            await context.send(
+                f"Command prefix set to {self.format_prefix_for_display(parsed_prefix)}.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        if normalized_action in {"reset", "default"}:
+            if not self.can_manage_prefix(context):
+                await context.send(NO_PERMISSION)
+                return
+            await self.reset_guild_prefix(context.guild.id)
+            await context.send(
+                f"Command prefix reset to {self.format_prefix_for_display(DEFAULT_COMMAND_PREFIX)}.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        await context.send(
+            (
+                "Usage:\n"
+                f"{self.format_command_example(current_prefix, 'prefix show')}\n"
+                f"{self.format_command_example(current_prefix, 'prefix set ?')}\n"
+                f"{self.format_command_example(current_prefix, 'prefix reset')}"
+            ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -4524,7 +4916,7 @@ class DyadiaGuardianBot(commands.Bot):
             LOGGER.info("Persistent storage backend: PostgreSQL")
         else:
             LOGGER.info(
-                "Persistent storage backend: local JSON files for auto-react, no-link, and AFK data; modlogs stay in memory."
+                "Persistent storage backend: local JSON files for auto-react, no-link, AFK, and prefix data; modlogs stay in memory."
             )
 
     @tasks.loop(minutes=5)
